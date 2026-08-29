@@ -1,0 +1,13 @@
+<component name="libraryTable">
+  <library name="mirth-client">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/../mirth-libs/client/log4j-1.2-api-2.17.2.jar!/" />
+      <root url="jar://$PROJECT_DIR$/../mirth-libs/client/miglayout-swing-4.2.jar!/" />
+      <root url="jar://$PROJECT_DIR$/../mirth-libs/client/miglayout-core-4.2.jar!/" />
+      <root url="jar://$PROJECT_DIR$/../mirth-libs/client/mirth-client-core.jar!/" />
+      <root url="jar://$PROJECT_DIR$/../mirth-libs/client/mirth-client.jar!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

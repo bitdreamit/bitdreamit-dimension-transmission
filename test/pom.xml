@@ -10,7 +10,7 @@
         <version>1.0.0</version>
     </parent>
 
-    <artifactId>bitdreamit-dimension-transmission-test</artifactId>
+    <artifactId>test</artifactId>
     <packaging>jar</packaging>
     <name>bitdreamit-dimension-transmission-test</name>
     <description>Unit tests: frame checksum, round-trip and corruption handling.</description>
@@ -18,12 +18,12 @@
     <dependencies>
         <dependency>
             <groupId>com.bitdreamit.connect.plugins.transmission.dimension</groupId>
-            <artifactId>bitdreamit-dimension-transmission-shared</artifactId>
+            <artifactId>shared</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>com.bitdreamit.connect.plugins.transmission.dimension</groupId>
-            <artifactId>bitdreamit-dimension-transmission-server</artifactId>
+            <artifactId>server</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

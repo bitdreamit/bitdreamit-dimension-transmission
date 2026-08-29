@@ -10,7 +10,7 @@
         <version>1.0.0</version>
     </parent>
 
-    <artifactId>bitdreamit-dimension-transmission-shared</artifactId>
+    <artifactId>shared</artifactId>
     <packaging>jar</packaging>
     <name>bitdreamit-dimension-transmission-shared</name>
     <description>Shared module: protocol constants and transmission-mode properties.
