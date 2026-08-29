@@ -1,0 +1,154 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.bitdreamit.connect.plugins.transmission.dimension</groupId>
+    <artifactId>bitdreamit-dimension-transmission</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+
+    <name>bitdreamit-dimension-transmission</name>
+    <description>Siemens Dimension native host-interface transmission mode plugin for Mirth Connect 4.5+</description>
+    <url>https://bitdreamit.com</url>
+    <inceptionYear>2025</inceptionYear>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+        </license>
+    </licenses>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <mirth.libs>${user.home}/mirth-libs</mirth.libs>
+        <mirth.version>4.5.2</mirth.version>
+        <miglayout.version>4.2</miglayout.version>
+        <log4j12api.version>2.17.2</log4j12api.version>
+        <junit.version>4.13.2</junit.version>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+    </properties>
+
+    <!--
+        IMPORTANT (build prerequisites)
+        ------------------------------------------------------------------
+        Mirth Connect jars are not published to Maven Central, so each
+        module pulls them in as `system`-scoped dependencies from a local
+        folder, by default `${user.home}/mirth-libs/`. Override with
+        `-Dmirth.libs=/path/to/mirth-libs` on the command line.
+
+        The shared module's `DimensionTransmissionModeProperties` extends
+        `com.mirth.connect.model.transmission.TransmissionModeProperties`
+        (in mirth-client-core.jar). In Mirth 4.5+ that parent class
+        implements `com.mirth.connect.donkey.util.purge.Purgable`, which
+        lives in donkey-server.jar. If donkey-server.jar is NOT on the
+        classpath, the compiler fails with:
+
+            java: cannot access com.mirth.connect.donkey.util.purge.Purgable
+            class file for Purgable not found
+
+        Each module-level pom.xml below already declares both jars.
+    -->
+
+    <modules>
+        <module>shared</module>
+        <module>server</module>
+        <module>client</module>
+        <module>test</module>
+    </modules>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Internal modules -->
+            <dependency>
+                <groupId>com.bitdreamit.connect.plugins.transmission.dimension</groupId>
+                <artifactId>bitdreamit-dimension-transmission-shared</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <!-- Mirth Connect jars (system-scoped, point at mirth-libs/) -->
+            <dependency>
+                <groupId>com.mirth</groupId>
+                <artifactId>mirth-client-core</artifactId>
+                <version>${mirth.version}</version>
+                <scope>system</scope>
+                <systemPath>${mirth.libs}/client/mirth-client-core.jar</systemPath>
+            </dependency>
+            <dependency>
+                <groupId>com.mirth</groupId>
+                <artifactId>mirth-client</artifactId>
+                <version>${mirth.version}</version>
+                <scope>system</scope>
+                <systemPath>${mirth.libs}/client/mirth-client.jar</systemPath>
+            </dependency>
+            <dependency>
+                <groupId>com.mirth</groupId>
+                <artifactId>mirth-server</artifactId>
+                <version>${mirth.version}</version>
+                <scope>system</scope>
+                <systemPath>${mirth.libs}/server/mirth-server.jar</systemPath>
+            </dependency>
+            <dependency>
+                <groupId>com.mirth</groupId>
+                <artifactId>donkey-server</artifactId>
+                <version>${mirth.version}</version>
+                <scope>system</scope>
+                <systemPath>${mirth.libs}/server/donkey-server.jar</systemPath>
+            </dependency>
+            <!--
+                MigLayout 4.2 - used by the client settings panel.
+                BOTH jars are required: miglayout-swing references LC,
+                which lives in miglayout-core.
+            -->
+            <dependency>
+                <groupId>com.miglayout</groupId>
+                <artifactId>miglayout-core</artifactId>
+                <version>${miglayout.version}</version>
+                <scope>system</scope>
+                <systemPath>${mirth.libs}/client/miglayout-core-${miglayout.version}.jar</systemPath>
+            </dependency>
+            <dependency>
+                <groupId>com.miglayout</groupId>
+                <artifactId>miglayout-swing</artifactId>
+                <version>${miglayout.version}</version>
+                <scope>system</scope>
+                <systemPath>${mirth.libs}/client/miglayout-swing-${miglayout.version}.jar</systemPath>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.logging.log4j</groupId>
+                <artifactId>log4j-1.2-api</artifactId>
+                <version>${log4j12api.version}</version>
+                <scope>system</scope>
+                <systemPath>${mirth.libs}/server/log4j-1.2-api-${log4j12api.version}.jar</systemPath>
+            </dependency>
+            <dependency>
+                <groupId>junit</groupId>
+                <artifactId>junit</artifactId>
+                <version>${junit.version}</version>
+                <scope>test</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <version>3.11.0</version>
+                </plugin>
+                <plugin>
+                    <artifactId>maven-jar-plugin</artifactId>
+                    <version>3.3.0</version>
+                </plugin>
+                <plugin>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.1.2</version>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>

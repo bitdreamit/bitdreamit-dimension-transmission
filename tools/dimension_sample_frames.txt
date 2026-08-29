@@ -1,0 +1,9 @@
+# Reference frames (hex) for decode_dimension.py --hex
+# Poll from a real Dimension EXL with LM, Instrument ID "DIM" (captured)
+02 50 1C 44 49 4D 1C 31 1C 31 1C 30 1C 34 38 03
+# Result frame: sample 52, Serum, Routine, 10:44:44 on 11-Nov-25, GLUC 276 mg/dL, CRE 22.05 mg/dL
+02 52 1C 30 1C 1C 35 32 1C 31 1C 1C 30 1C 34 34 34 34 31 30 31 31 31 31 32 35 1C 31 1C 31 1C 32 1C 47 4C 55 43 1C 32 37 36 1C 6D 67 2F 64 4C 1C 1C 43 52 45 1C 32 32 2E 30 35 1C 6D 67 2F 64 4C 1C 33 33 03
+# Result Acceptance (Accept) - computer -> instrument
+02 4D 1C 41 1C 1C 45 32 03
+# No Request - computer -> instrument
+02 4E 1C 36 41 03

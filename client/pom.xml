@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.bitdreamit.connect.plugins.transmission.dimension</groupId>
+        <artifactId>bitdreamit-dimension-transmission</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>bitdreamit-dimension-transmission-client</artifactId>
+    <packaging>jar</packaging>
+    <name>bitdreamit-dimension-transmission-client</name>
+    <description>Client-side transmission mode plugin: settings panel UI and
+        the TransmissionModeClientProvider that drives the send flow.</description>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.bitdreamit.connect.plugins.transmission.dimension</groupId>
+            <artifactId>bitdreamit-dimension-transmission-shared</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.mirth</groupId>
+            <artifactId>mirth-client</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.mirth</groupId>
+            <artifactId>mirth-client-core</artifactId>
+        </dependency>
+        <!-- Purgable lives in donkey-server.jar; required because the shared
+             module's TransmissionModeProperties implements it. -->
+        <dependency>
+            <groupId>com.mirth</groupId>
+            <artifactId>donkey-server</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.miglayout</groupId>
+            <artifactId>miglayout-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.miglayout</groupId>
+            <artifactId>miglayout-swing</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-1.2-api</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>bitdreamit-dimension-transmission-client</finalName>
+    </build>
+</project>
