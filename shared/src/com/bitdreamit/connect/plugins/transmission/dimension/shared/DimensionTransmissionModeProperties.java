@@ -83,6 +83,7 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
         setStartOfMessageBytes(String.format("%02X", DimensionConstants.STX));
         setEndOfMessageBytes(String.format("%02X", DimensionConstants.ETX));
     }
+
     /**
      * Metadata describing every editable property of this transmission mode
      * (display name, description, editor type, default value).
