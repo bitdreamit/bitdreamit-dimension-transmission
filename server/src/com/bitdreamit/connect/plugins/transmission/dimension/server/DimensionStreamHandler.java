@@ -44,17 +44,30 @@ import com.mirth.connect.donkey.server.message.batch.BatchStreamReader;
  * instrument's next frame) can be pushed back and never lost.</p>
  *
  * <p>Optional application-level auto responses (the instrument requires
- * them in Send/Receive and Send ID/Receive modes):</p>
+ * them in Send/Receive and Send ID/Receive modes) - ALL sent inside the
+ * read path, milliseconds after frame receipt, so the instrument's
+ * 1-second timers are always met and Mirth's asynchronous processing
+ * can never delay a protocol answer:</p>
  * <ul>
  *   <li>Result (R) / Calibration Result (C) frame received ->
  *       send Result Acceptance {@code <STX>M<FS>A<FS><FS>E2<ETX>}
  *       right after the DLC ACK (the instrument starts a 1-second timer
  *       for it and reports error 320 if it never arrives).</li>
- *   <li>Poll (P) / Query (I) frame received ->
- *       send No Request {@code <STX>N<FS>6A<ETX>} ("nothing to download").
- *       Disable via properties when the channel itself builds Sample
- *       Request (D) responses for order download.</li>
+ *   <li>Query (I) frame received (barcode scan, Send ID/Receive mode) ->
+ *       DYNAMIC order download: look up the scanned sample ID in the
+ *       {@link DimensionOrderRegistry}; if found, build and send the
+ *       Sample Request {@code <STX>D<FS>...<ETX>} immediately, otherwise
+ *       send No Request {@code <STX>N<FS>6A<ETX>}.</li>
+ *   <li>Poll (P) frame received ->
+ *       on a conversational poll (First Poll = 0, Request = 1) pop the
+ *       next queued order from the registry and send its Sample Request;
+ *       otherwise No Request. (PN D00396 p.1-8/1-9, p.1-24.)</li>
  * </ul>
+ *
+ * <p>The channel transformer is therefore PURELY a business formatter
+ * (R -> HL7 ORU) - it never builds protocol frames and never touches
+ * responseMap, eliminating the whole class of transformer-side protocol
+ * errors (row/map/strict-comparison failures) of previous revisions.</p>
  */
 public class DimensionStreamHandler extends StreamHandler {
 
@@ -156,7 +169,8 @@ public class DimensionStreamHandler extends StreamHandler {
                 }
 
                 // Frame is good: ACK it immediately (1-second instrument timer),
-                // then fire the optional application-level responses.
+                // then fire the application-level responses (order download,
+                // result acceptance) while the instrument timer is still running.
                 sendByte(props.getPositiveAckByte());
                 nakRetries = 0;
 
@@ -206,7 +220,9 @@ public class DimensionStreamHandler extends StreamHandler {
 
     /**
      * Application-level auto responses, sent AFTER the DLC ACK exactly in
-     * the order the instrument expects them.
+     * the order the instrument expects them. All Dimension answers go out
+     * HERE, inside the read path (see class javadoc): result acceptance
+     * after R/C, dynamic order download or No Request after P/I.
      */
     private void autoRespond(byte[] payload) throws IOException {
         if (payload == null || payload.length < 1) {
@@ -236,13 +252,12 @@ public class DimensionStreamHandler extends StreamHandler {
                 logger.debug("Auto Result Acceptance for frame type '" + type + "': " + status);
                 sendApplicationFrame(acceptancePayload);
 
-            } else if ((type == DimensionConstants.MSG_POLL
-                    || type == DimensionConstants.MSG_QUERY)
-                    && props.isAutoPollResponse()) {
+            } else if (type == DimensionConstants.MSG_POLL
+                    || type == DimensionConstants.MSG_QUERY) {
 
-                // <STX>N<FS>6A<ETX> - checksum verified against the manual
-                logger.debug("Auto No Request response for frame type '" + type + "'");
-                sendApplicationFrame(DimensionConstants.NO_REQUEST_PAYLOAD);
+                // Dynamic bidirectional order download (redesign rev 10):
+                // registry lookup -> Sample Request (D), else No Request (N).
+                answerPollOrQuery(payload, type);
             }
         } catch (IOException e) {
             // The inbound frame was valid and ACKed - an auto-response failure
@@ -250,6 +265,121 @@ public class DimensionStreamHandler extends StreamHandler {
             logger.error("Failed to send Dimension auto response: " + e.getMessage());
         }
     }
+
+    /**
+     * Answers a Poll (P) or Query (I) frame from the dynamic order registry.
+     *
+     * <ul>
+     *   <li>Query [I] (barcode scan): field 1 is the scanned Sample ID -
+     *       find + remove the matching order. The D frame echoes the QUERIED
+     *       ID (manual p.1-14: "From the computer the Sample ID and Sample ID
+     *       Field must match or the message will be rejected").</li>
+     *   <li>Poll [P]: only a conversational poll (First Poll = 0 AND
+     *       Request = 1, manual p.1-8) downloads; it pops the FIFO head.
+     *       Every other poll gets No Request (the documented default).</li>
+     *   <li>No order -> No Request (N) when autoPollResponse is on.</li>
+     * </ul>
+     */
+    private void answerPollOrQuery(byte[] payload, char type) throws IOException {
+        String[] fields = splitFields(payload);
+
+        if (props.isOrderLookupEnabled()) {
+            String key = props.getOrderQueueKey();
+            DimensionOrderRegistry.seedDemoOrdersIfEnabled(key);
+
+            DimensionOrderRegistry.DimensionOrder order = null;
+            String sampleId = null;
+
+            if (type == DimensionConstants.MSG_QUERY) {
+                // Table 1-18: I | Sample ID | [Segment | Position (enhanced)]
+                sampleId = fields.length > 1 ? fields[1] : "";
+                order = DimensionOrderRegistry.findOrder(key, sampleId);
+                if (order != null) {
+                    // echo the scanned ID, not the stored one
+                    order = echoSampleId(order, sampleId);
+                }
+            } else { // poll - Table 1-11: P | Instrument ID | First Poll | Request | #Carriers
+                String firstPoll = fields.length > 2 ? fields[2] : "";
+                String request   = fields.length > 3 ? fields[3] : "";
+                if ("0".equals(firstPoll) && "1".equals(request)) {
+                    order = DimensionOrderRegistry.takeOrder(key);
+                    if (order != null) { sampleId = order.getSampleId(); }
+                }
+            }
+
+            if (order != null && !order.getTests().isEmpty()) {
+                String dPayload = buildSampleRequestPayload(order);
+                logger.info("Dimension order download for "
+                        + (type == DimensionConstants.MSG_QUERY ? "query " : "poll ")
+                        + sampleId + " (" + order.getTestCount() + " test(s))");
+                sendApplicationFrame(dPayload);
+                return;
+            }
+        }
+
+        if (props.isAutoPollResponse()) {
+            logger.debug("No order for frame type '" + type + "' - auto No Request");
+            sendApplicationFrame(DimensionConstants.NO_REQUEST_PAYLOAD);
+        }
+    }
+
+    /**
+     * Builds the Sample Request (D) payload exactly as PN D00396 Table 1-12
+     * (p. 1-9) lays it out - NO STX/ETX/checksum (sendApplicationFrame adds
+     * those). Layout (FS-separated):
+     * <pre>D | Carrier(0) | Loadlist(0) | Transaction(A) | Patient | SampleID |
+     *     Type | Location | Priority | #Cups(1) | Cup(**) | Dilution(1) |
+     *     #Tests | TestName...</pre>
+     */
+    static String buildSampleRequestPayload(DimensionOrderRegistry.DimensionOrder order) {
+        StringBuilder sb = new StringBuilder();
+        sb.append('D')
+          .append(FS_CH).append('0')                     // Sample Carrier ID (always 0)
+          .append(FS_CH).append('0')                     // Loadlist ID (always 0)
+          .append(FS_CH).append('A')                     // Transaction: A = Add, D = Delete
+          .append(FS_CH).append(nullSafe(order.getPatient()))
+          .append(FS_CH).append(nullSafe(order.getSampleId()))
+          .append(FS_CH).append(nullSafe(order.getType()))
+          .append(FS_CH)                                 // Location (optional, empty)
+          .append(FS_CH).append(nullSafe(order.getPriority()))
+          .append(FS_CH).append('1')                     // # Of Cups For Sample
+          .append(FS_CH).append("**")                    // Cup Position (any cup)
+          .append(FS_CH).append('1')                     // Dilution
+          .append(FS_CH).append(order.getTestCount());   // # Of Tests
+        for (String test : order.getTests()) {
+            sb.append(FS_CH).append(test);
+        }
+        return sb.toString();
+    }
+
+    /** Returns a copy of the order whose sample ID echoes the scanned/queried one. */
+    private static DimensionOrderRegistry.DimensionOrder echoSampleId(
+            DimensionOrderRegistry.DimensionOrder order, String queriedId) {
+        String scanned = queriedId == null ? "" : queriedId.trim();
+        if (scanned.isEmpty() || scanned.equals(order.getSampleId())) {
+            return order;
+        }
+        return new DimensionOrderRegistry.DimensionOrder(
+                scanned, order.getPatient(), order.getType(),
+                order.getPriority(), order.getTests());
+    }
+
+    /** Splits the payload (TYPE + trailing checksum included) on FS and trims every field. */
+    private static String[] splitFields(byte[] payload) {
+        String s = new String(payload, java.nio.charset.StandardCharsets.US_ASCII);
+        String[] parts = s.split("\u001C");
+        for (int i = 0; i < parts.length; i++) {
+            parts[i] = parts[i].trim();
+        }
+        return parts;
+    }
+
+    private static String nullSafe(String s) {
+        return s == null ? "" : s;
+    }
+
+    /** FS as a char constant for payload building. */
+    private static final char FS_CH = 0x1C;
 
     // ==================================================================
     // WRITE (send one frame to the instrument, e.g. Sample Request "D")
@@ -263,7 +393,18 @@ public class DimensionStreamHandler extends StreamHandler {
 
         // The channel supplies the payload WITHOUT STX/ETX/checksum, e.g.
         // "D<FS>0<FS>0<FS>A<FS>Doe,John<FS>012345<FS>2<FS>...".
-        for (int attempt = 1; attempt <= Math.max(1, props.getMaxRetransmissions()); attempt++) {
+        //
+        // DLC policy (mirrors sendApplicationFrame): retransmit ONLY on an
+        // explicit NAK. A plain timeout is line contention - a blind
+        // retransmit would duplicate the frame and can race with the
+        // instrument's next transmission. If the instrument really missed
+        // the frame it NAKs, ENQs or simply re-polls, which re-triggers
+        // write() naturally. A timeout therefore never escalates to an
+        // IOException that would tear down the connection.
+        int maxAttempts = Math.max(1, props.getMaxRetransmissions());
+        int ackTimeout = props.getAckTimeoutMs() > 0 ? props.getAckTimeoutMs()
+                                                     : DimensionConstants.DEFAULT_ACK_TIMEOUT_MS;
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             ByteArrayOutputStream frame = new ByteArrayOutputStream();
             frame.write(props.getStartOfFrameByte());
             frame.write(data);
@@ -276,8 +417,7 @@ public class DimensionStreamHandler extends StreamHandler {
             outputStream.flush();
             logger.debug("Dimension frame sent (attempt " + attempt + "), waiting for ACK");
 
-            int response = readAckResponse(props.getAckTimeoutMs() > 0 ? props.getAckTimeoutMs()
-                                                                       : DimensionConstants.DEFAULT_ACK_TIMEOUT_MS);
+            int response = readAckResponse(ackTimeout);
 
             if (response == props.getPositiveAckByte()) {
                 logger.debug("Dimension frame ACKed");
@@ -285,13 +425,17 @@ public class DimensionStreamHandler extends StreamHandler {
             } else if (response == props.getNegativeAckByte()) {
                 logger.warn("Dimension frame NAKed, retransmitting (attempt " + attempt + ")");
             } else {
-                logger.warn("Dimension no ACK within " + props.getAckTimeoutMs()
-                        + " ms (contention), retransmitting (attempt " + attempt + ")");
+                logger.warn("Dimension no ACK within " + ackTimeout
+                        + " ms (contention) - stopping wait, NOT retransmitting");
+                return;
             }
         }
 
-        throw new IOException("Dimension frame not acknowledged after "
-                + props.getMaxRetransmissions() + " attempts");
+        // Every attempt was explicitly NAKed: the instrument refuses this
+        // frame. Surface it as a message error so Mirth logs/queues it,
+        // instead of silently pretending the transfer succeeded.
+        throw new IOException("Dimension frame NAKed "
+                + maxAttempts + " times - refused by instrument");
     }
 
     @Override

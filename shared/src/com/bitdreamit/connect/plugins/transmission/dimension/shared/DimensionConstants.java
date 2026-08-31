@@ -92,5 +92,5 @@ public final class DimensionConstants {
     // Plugin identity
     // ------------------------------------------------------------------
     public static final String PLUGIN_NAME    = "Siemens Dimension";
-    public static final String PLUGIN_VERSION = "1.0.0";
+    public static final String PLUGIN_VERSION = "2.0.0";
 }

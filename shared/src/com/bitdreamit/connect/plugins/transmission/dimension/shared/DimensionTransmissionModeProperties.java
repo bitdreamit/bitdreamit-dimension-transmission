@@ -65,6 +65,22 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
     /** When true, a stray ENQ (0x05) from the instrument is answered with ACK. */
     private boolean autoEnqAck = true;
 
+    // --- Dynamic bidirectional order download (redesign rev 10) ---
+    /**
+     * When true (default), Poll [P] and Query [I] frames are answered from
+     * the {@code DimensionOrderRegistry}: a queued/matching order becomes a
+     * Sample Request (D) frame sent inside the read path; an empty registry
+     * falls back to No Request (N) when {@code autoPollResponse} is on.
+     * The channel transformer never builds protocol frames in this mode.
+     */
+    private boolean orderLookupEnabled = true;
+    /**
+     * Registry queue key. Every channel (or connector) can have its own
+     * order queue; pushing channels must push with the SAME key. Empty =
+     * {@code "default"}.
+     */
+    private String  orderQueueKey = "default";
+
     // --- Message dispatch ---
     /**
      * When true the dispatched message still carries the trailing 2-character
@@ -111,6 +127,8 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
         props.put("resultAcceptanceStatus",  new DataTypePropertyDescriptor(resultAcceptanceStatus,        "Result Acceptance Status",      "Status of the auto acceptance: A = accept, R = reject.", PropertyEditorType.STRING));
         props.put("autoPollResponse",        new DataTypePropertyDescriptor(autoPollResponse,              "Auto Poll/Query Response",      "Answer P/I frames with <STX>N<FS>.. (No Request).", PropertyEditorType.BOOLEAN));
         props.put("autoEnqAck",              new DataTypePropertyDescriptor(autoEnqAck,                    "Auto ENQ Acknowledge",          "Answer a stray ENQ from the instrument with ACK.", PropertyEditorType.BOOLEAN));
+        props.put("orderLookupEnabled",      new DataTypePropertyDescriptor(orderLookupEnabled,            "Dynamic Order Lookup",          "Answer P/I with Sample Request (D) from the DimensionOrderRegistry, else No Request (N).", PropertyEditorType.BOOLEAN));
+        props.put("orderQueueKey",           new DataTypePropertyDescriptor(orderQueueKey,                 "Order Queue Key",               "Registry queue key - pushing channels must push with the same key.", PropertyEditorType.STRING));
         props.put("includeChecksumInPayload",new DataTypePropertyDescriptor(includeChecksumInPayload,      "Checksum in Payload",           "Keep the 2-character checksum at the end of the dispatched message.", PropertyEditorType.BOOLEAN));
         props.put("serverMode",              new DataTypePropertyDescriptor(serverMode,                    "Server Mode",                   "true = receiver (listener/source), false = sender.", PropertyEditorType.BOOLEAN));
 
@@ -139,6 +157,9 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
         if (has(properties, "resultAcceptanceStatus"))   this.resultAcceptanceStatus   = String.valueOf(value(properties, "resultAcceptanceStatus"));
         if (has(properties, "autoPollResponse"))         this.autoPollResponse         = toBoolean(value(properties, "autoPollResponse"), autoPollResponse);
         if (has(properties, "autoEnqAck"))               this.autoEnqAck               = toBoolean(value(properties, "autoEnqAck"), autoEnqAck);
+        if (has(properties, "orderLookupEnabled"))       this.orderLookupEnabled       = toBoolean(value(properties, "orderLookupEnabled"), orderLookupEnabled);
+        Object orderKey = has(properties, "orderQueueKey") ? value(properties, "orderQueueKey") : null;
+        if (orderKey != null)                            this.orderQueueKey            = String.valueOf(orderKey);
         if (has(properties, "includeChecksumInPayload")) this.includeChecksumInPayload = toBoolean(value(properties, "includeChecksumInPayload"), includeChecksumInPayload);
         if (has(properties, "serverMode"))               this.serverMode               = toBoolean(value(properties, "serverMode"), serverMode);
     }
@@ -201,6 +222,8 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
     public String getResultAcceptanceStatus() { return resultAcceptanceStatus; }
     public boolean isAutoPollResponse() { return autoPollResponse; }
     public boolean isAutoEnqAck() { return autoEnqAck; }
+    public boolean isOrderLookupEnabled() { return orderLookupEnabled; }
+    public String getOrderQueueKey() { return orderQueueKey; }
     public boolean isIncludeChecksumInPayload() { return includeChecksumInPayload; }
     public boolean isServerMode() { return serverMode; }
 
@@ -222,6 +245,8 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
     public void setResultAcceptanceStatus(String resultAcceptanceStatus) { this.resultAcceptanceStatus = resultAcceptanceStatus; }
     public void setAutoPollResponse(boolean autoPollResponse) { this.autoPollResponse = autoPollResponse; }
     public void setAutoEnqAck(boolean autoEnqAck) { this.autoEnqAck = autoEnqAck; }
+    public void setOrderLookupEnabled(boolean orderLookupEnabled) { this.orderLookupEnabled = orderLookupEnabled; }
+    public void setOrderQueueKey(String orderQueueKey) { this.orderQueueKey = orderQueueKey; }
     public void setIncludeChecksumInPayload(boolean includeChecksumInPayload) { this.includeChecksumInPayload = includeChecksumInPayload; }
     public void setServerMode(boolean serverMode) { this.serverMode = serverMode; }
 
@@ -236,6 +261,8 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
         purged.put("autoResultAcceptance", autoResultAcceptance);
         purged.put("autoPollResponse", autoPollResponse);
         purged.put("autoEnqAck", autoEnqAck);
+        purged.put("orderLookupEnabled", orderLookupEnabled);
+        purged.put("orderQueueKey", orderQueueKey);
         purged.put("includeChecksumInPayload", includeChecksumInPayload);
         purged.put("serverMode", serverMode);
         return purged;
