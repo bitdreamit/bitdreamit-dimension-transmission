@@ -4,6 +4,17 @@
  * Reference transformer shipped with the bitdreamit-dimension-transmission
  * extension. Revision 5 - three repairs over the earlier revision:
  *
+ * CHANNEL REQUIREMENTS (verified against Mirth 4.5.2 JavaScriptBuilder):
+ *   Source Inbound Data Type = Raw   and   Source Response = None.
+ *   With HL7 V2.x inbound, Mirth pre-serializes the payload into
+ *   <HL7Message><R&#x1c;...></R&#x1c;...></HL7Message> (0x1C is illegal in an XML
+ *   tag name) and the generated prelude
+ *       msg = new XML(connectorMessage.getTransformedData());
+ *   dies with 'TypeError: Element type "R" must be followed by either
+ *   attribute specifications, ">" or "/>"' BEFORE this script runs. Raw inbound
+ *   passes the payload as a plain string and this script reads
+ *   connectorMessage.getRawData() directly.
+ *
  *   FIX#1 (HIGH) Tolerant final test group. Real instruments (verified on a
  *                Dimension EXL capture) collapse the FINAL empty error field
  *                of the last test group, so the last group may carry only

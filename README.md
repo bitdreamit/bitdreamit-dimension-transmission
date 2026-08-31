@@ -324,6 +324,8 @@ is a PuTTY-style paste where STX/FS/ETX are invisible.
 | Repeated identical frames in captures | Normal: nobody ACKed within 1 s, the instrument retransmits up to 4 times |
 | `ForbiddenClassException` in Administrator | The client plugin registers the package automatically; make sure the extension is **enabled** in the Administrator's Extension list |
 | Multiple result messages per sample | The instrument's **priority panel** feature sends partial results — your transformer must merge or accept duplicates |
+| Message Source tab shows a flattened blob like `R0DOE,JOHN10011ER1...CD` with no delimiters | **Normal display** — `<FS>` (0x1C) is a non-printable control character, so the Administrator renders the fields stuck together. Export the message and check the RAW `content`: the `&#x1c;` entities are the field separators and the payload is intact |
+| Every message ends **ERROR** with `Transformer error ... TypeError: Element type "R" must be followed by either attribute specifications, ">" or "/>"` | Source **Inbound Data Type is HL7 V2.x (or XML)**. Mirth pre-serializes the non-HL7 payload to `<HL7Message><R&#x1c;0&#x1c;...></R&#x1c;...></HL7Message>` — `0x1C` is illegal in an XML tag name — and the generated prelude `msg = new XML(connectorMessage.getTransformedData());` crashes before your script runs. Fix: **Source → Set Data Types → Inbound Data Type = Raw** and **Response = None** (Mirth then passes the payload as a plain string). See section 5 tables |
 | Poll storm (`P` every 15 s) in logs | Normal idle behaviour; `Auto Poll/Query Response` answers it with `N` |
 
 ---
