@@ -123,6 +123,34 @@ public class DimensionFrameTest {
                 written.contains(frame(sampleRequest)));
     }
 
+    @Test
+    public void testLowercaseChecksumAccepted() throws IOException {
+        // PN D00396 renders the checksum as two uppercase hex characters, but
+        // some instrument configurations emit lower-case hex on the wire.
+        // The checksum VALUE must win over its case: the frame below is
+        // byte-identical to a real R frame except "CD" -> "cd".
+        String payload = "R\u001C0\u001CDOE,JOHN\u001C1001\u001C1\u001CER\u001C1\u001C123456310825"
+                + "\u001C1\u001C1\u001C2\u001CGLU\u001C97\u001Cmg/dL\u001C\u001CCREA\u001C1.1\u001Cmg/dL\u001C";
+        String upper = frame(payload);
+        int chkIdx = upper.lastIndexOf((char) ETX) - 2;
+        String lower = upper.substring(0, chkIdx)
+                + upper.substring(chkIdx, chkIdx + 2).toLowerCase()
+                + upper.substring(chkIdx + 2);
+        assertTrue("test setup: payload checksum is CD",
+                chk(payload).equals("CD"));
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        DimensionStreamHandler handler = newHandler(lower, out);
+
+        byte[] msg = handler.read();
+        assertEquals('R', msg[0]);
+
+        String written = out.toString("US-ASCII");
+        assertTrue("lowercase checksum must be ACKed", written.indexOf(ACK) >= 0);
+        assertTrue("lowercase checksum must not be NAKed", written.indexOf(NAK) < 0);
+        assertNull(handler.read());
+    }
+
     private DimensionStreamHandler newHandler(String inbound, ByteArrayOutputStream outbound) {
         DimensionTransmissionModeProperties props = new DimensionTransmissionModeProperties();
         props.setAutoResultAcceptance(true);

@@ -1,12 +1,28 @@
 /**
  * Siemens Dimension -> HL7 v2 ORU^R01  (Mirth Connect source transformer)
  * ---------------------------------------------------------------------------
+ * Reference transformer shipped with the bitdreamit-dimension-transmission
+ * extension. Revision 5 - three repairs over the earlier revision:
+ *
+ *   FIX#1 (HIGH) Tolerant final test group. Real instruments (verified on a
+ *                Dimension EXL capture) collapse the FINAL empty error field
+ *                of the last test group, so the last group may carry only
+ *                name + result + units. The old strict guard
+ *                "base + 3 >= dataFields.length" rejected that group and
+ *                silently dropped the LAST test (CREA / CRE) from every
+ *                result frame.
+ *   FIX#2 (MED)  OBX-11 = 'F' (Result Status) and OBX-14 = analysis
+ *                datetime; 'F' was on OBX-9 and the date on OBX-13.
+ *   FIX#3 (LOW)  Metadata columns SOURCE / TYPE are now filled
+ *                (channelMap 'mirth_source' / 'mirth_type').
+ *
  * Expects the RAW payload dispatched by the bitdreamit-dimension-transmission
  * mode: everything between <STX> and <ETX>, i.e.
  *
  *     TYPE <FS> data ... <FS> <CHK:2 hex>
  *
- * with FS = \u001C. Frame types handled:
+ * with FS = \u001C ("Checksum in Payload" must stay ON so the trailing
+ * checksum arrives for re-verification). Frame types handled:
  *   R - Result              -> HL7 ORU^R01, one OBX per test
  *   C - Calibration Result  -> logged only (route to QC/calibration table)
  *   M - Request/Result Acceptance (from instrument, after our D download)
@@ -72,6 +88,9 @@ if (chkCalc !== chkReceived) {
 var msgType = tokens[0];
 channelMap.put('dimensionChecksum', chkCalc);
 channelMap.put('dimensionMessageType', msgType);
+// FIX#3: feed the channel metadata columns (SOURCE / TYPE)
+channelMap.put('mirth_source', 'DimensionEXL');
+channelMap.put('mirth_type', msgType);
 
 if (msgType === 'C') {
     // Calibration Result - store raw and stop (route to your QC system here)
@@ -124,34 +143,50 @@ var msh = ['MSH|^~\\&', sendingApp, 'Dimension', 'LIS', 'LIS',
 var pid = 'PID|||' + patientId + '|||';
 // Barcode-only runs often have an empty Patient ID - keep it empty then.
 
-var obr = ['OBR', '1', '', '', sampleNo + '^DIMENSIONSAMPLE', '', '', '', '',
-           '', '', '', '', '', '', '', '', '', '', '', '', '',
-           hl7ts].join('|');
+// OBR: 17 empty fields -> hl7ts lands on OBR-22 (Results Rpt/Status Chng DT)
+var obr = ['OBR', '1', '', '', sampleNo + '^DIMENSIONSAMPLE',
+           '', '', '', '', '',                                  //  5 -  9
+           '', '', '', '', '',                                  // 10 - 14
+           '', '', '', '', '', '', '',                          // 15 - 21
+           hl7ts].join('|');                                    // 22
 
 var segments = [msh, pid, obr];
 var obxIndex = 0;
 
 for (var t = 0; t < nTests; t++) {
     var base = 10 + t * 4;
-    if (base + 3 >= dataFields.length) {
+
+    // FIX#1: tolerant final group. The instrument collapses the FINAL empty
+    // error field (verified on the captured frame), so the last group may
+    // carry only name + result + units.
+    var errCode = '';
+    if (base + 3 < dataFields.length) {
+        errCode = dataFields[base + 3];
+    } else if (t === nTests - 1 && base + 2 < dataFields.length) {
+        // final empty error field collapsed by the instrument - acceptable
+    } else {
         logger.warn('R frame declares ' + nTests + ' tests but only ' +
                 Math.floor((dataFields.length - 10) / 4) + ' complete test groups present');
         break;
     }
+
     var testName = dataFields[base];
     var result   = dataFields[base + 1];
     var units    = dataFields[base + 2];
-    var errCode  = dataFields[base + 3];
 
     obxIndex++;
     var valueType = /^[0-9.\-eE]+$/.test(result) ? 'NM' : 'ST';
 
+    // FIX#2: OBX-11 = 'F' (Result Status), OBX-14 = analysis datetime
     var obx = ['OBX', String(obxIndex), valueType,
                testName + '^^LN:' + testName,   // OBX-3: map to your LOINC dictionary
                String(t + 1),                    // OBX-4: sub-id
                result,                           // empty when suppressed by an error
-               units, '', '', 'F', '', '', '',
-               hl7ts.substring(0, 8)].join('|');
+               units, '', '', '', '',            // OBX-7..OBX-10
+               'F',                              // OBX-11: Result Status
+               '',                               // OBX-12
+               '',                               // OBX-13
+               hl7ts.substring(0, 8)].join('|'); // OBX-14: Date/Time of Analysis
     segments.push(obx);
 
     if (errCode !== '' && ERROR_CODES[errCode]) {

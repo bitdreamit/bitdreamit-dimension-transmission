@@ -24,7 +24,9 @@ import com.mirth.connect.donkey.server.message.batch.BatchStreamReader;
  * <pre>
  *     Frame : <STX> TYPE <FS> data ... <FS> <CHK> <ETX>
  *     CHK   : 8-bit sum (mod 256) of every char between STX and CHK,
- *             rendered as two uppercase ASCII hex characters.
+ *             rendered as two ASCII hex characters. Uppercase per the
+ *             manual; lower-case hex received from the instrument is
+ *             accepted as well (case-insensitive comparison).
  *     ACK   : one 0x06 byte per valid frame, sent immediately.
  *     NAK   : one 0x15 byte per invalid checksum; sender retransmits
  *             the frame up to 4 times.
@@ -322,7 +324,7 @@ public class DimensionStreamHandler extends StreamHandler {
             received.append((char) (payload[i] & 0xFF));
         }
 
-        boolean ok = expected.contentEquals(received);
+        boolean ok = expected.equalsIgnoreCase(received.toString());
         if (!ok) {
             logger.debug("Checksum expected " + expected + " but received " + received);
         }
