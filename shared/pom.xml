@@ -10,7 +10,7 @@
         <version>1.0.0</version>
     </parent>
 
-    <artifactId>shared</artifactId>
+    <artifactId>bitdreamit-dimension-transmission-shared</artifactId>
     <packaging>jar</packaging>
     <name>bitdreamit-dimension-transmission-shared</name>
     <description>Shared module: protocol constants and transmission-mode properties.
@@ -40,11 +40,15 @@
         <finalName>bitdreamit-dimension-transmission-shared</finalName>
         <plugins>
             <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
+                <artifactId>maven-jar-plugin</artifactId>
                 <configuration>
-                    <source>7</source>
-                    <target>7</target>
+                    <archive>
+                        <manifestEntries>
+                            <Implementation-Title>bitdreamit-dimension-transmission-shared</Implementation-Title>
+                            <Implementation-Version>${project.version}</Implementation-Version>
+                            <Implementation-Vendor>Bit Dream IT</Implementation-Vendor>
+                        </manifestEntries>
+                    </archive>
                 </configuration>
             </plugin>
         </plugins>

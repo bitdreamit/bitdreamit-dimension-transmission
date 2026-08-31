@@ -108,13 +108,48 @@ The dispatched message (what your source transformer sees) is the payload
 
 ---
 
+## 2.1 IntelliJ IDEA Setup
+
+The repo ships a ready-to-use plain-Java IDEA project (same pattern as
+`bitdreamit-astm-e1381-transmission`): four modules (`shared`, `server`,
+`client`, `test`) wired to three project libraries via the `.iml` files
+in `.idea/libraries/`.
+
+1. Copy Mirth jars to a sibling `mirth-libs/` folder (see section 3 for
+   the exact layout). The project libraries in `.idea/libraries/` point
+   at `../mirth-libs/` relative to the repo root.
+2. Open the repo root in IntelliJ IDEA (File → Open). The four modules
+   are picked up from `.idea/modules.xml`; project JDK is `1.8`
+   (File → Project Structure → SDKs if you need to register one).
+3. The libraries must resolve to:
+   - `mirth-server` = `mirth-server.jar` + `donkey-server.jar` +
+     `mirth-client-core.jar` + `log4j-1.2-api-2.17.2.jar`
+   - `mirth-client` = `mirth-client.jar` + `mirth-client-core.jar` +
+     `miglayout-core-4.2.jar` + `miglayout-swing-4.2.jar` +
+     `log4j-1.2-api-2.17.2.jar`
+   - `junit-4`      = `junit-4.13.2.jar` + `hamcrest-core-1.3.jar`
+
+   > **Critical:** `donkey-server.jar` MUST be in the `mirth-server`
+   > library. Without it the `shared` module fails to compile with
+   > `cannot access com.mirth.connect.donkey.util.purge.Purgable`.
+4. Build → Build Artifacts is not required for production (use
+   `distribution/build.sh`); for ad-hoc runs, module `test` contains the
+   JUnit sources and runs with the `junit-4` library.
+5. If Mirth jars are unavailable and you only want a syntax check, the
+   minimal API stubs under `tools/compile-stubs/` compile the whole
+   plugin (see `tools/compile-stubs/README.txt`).
+
+---
+
 ## 3. Building
 
 **Prerequisites**
 
-1. JDK 8+ (tested with OpenJDK 17), Maven 3.6+
+1. JDK 8+ (tested with OpenJDK 17). No Maven required - the production
+   build is plain `javac` + `jar` (same pattern as
+   `bitdreamit-astm-e1381-transmission`).
 2. Mirth Connect 4.5.x jars extracted to `~/mirth-libs/` (override with
-   `-Dmirth.libs=/path/to/mirth-libs`):
+   `MIRTH_LIBS_DIR=/path/to/mirth-libs`):
 
 ```
 mirth-libs/
@@ -123,10 +158,13 @@ mirth-libs/
 │   ├── mirth-client.jar
 │   ├── miglayout-core-4.2.jar
 │   └── miglayout-swing-4.2.jar
-└── server/
-    ├── mirth-server.jar
-    ├── donkey-server.jar
-    └── log4j-1.2-api-2.17.2.jar
+├── server/
+│   ├── mirth-server.jar
+│   ├── donkey-server.jar
+│   └── log4j-1.2-api-2.17.2.jar
+└── test/
+    ├── junit-4.13.2.jar
+    └── hamcrest-core-1.3.jar
 ```
 
 > The shared module's `DimensionTransmissionModeProperties` extends
@@ -137,17 +175,30 @@ mirth-libs/
 **Build & test**
 
 ```bash
-./distribution/build.sh          # -> out/ (3 jars + plugin.xml + transmissionmode.xml)
-./distribution/build.sh clean
-mvn test                          # runs the frame/checksum unit tests
+cd distribution
+./build.sh            # -> out/ (3 jars + plugin.xml + transmissionmode.xml)
+./build.sh clean      # remove out/
+./build.sh test       # build + run the frame/checksum JUnit tests
+./build.sh rebuild    # clean + build
+
+./deploy.sh           # build + assemble ready-to-drop extension folder
+./deploy.sh zip       # ... + production ZIP (Extension Manager install)
+./deploy.sh install   # ... + copy to $MIRTH_HOME/extensions/ (backup included)
+
+MIRTH_HOME=/opt/mirth-connect ./check_extension.sh   # diagnose a deployed extension
 ```
+
+Maven is still supported for IDE/CI convenience (`mvn package` from the
+repo root produces the same three jars under `*/target/`), but the
+canonical artifacts come from `distribution/build.sh`.
 
 ---
 
 ## 4. Deploying
 
 1. Stop Mirth Connect.
-2. Copy the contents of `out/` to `<mirth>/extensions/bitdreamit-dimension-transmission/`.
+2. Copy the contents of `out/` (or run `./deploy.sh install`) to
+   `<mirth>/extensions/bitdreamit-dimension-transmission/`.
 3. Delete `<mirth>/extensions/.cache/`.
 4. Start Mirth Connect, restart the Mirth Administrator.
 5. `Siemens Dimension` now appears in the Transmission Mode dropdown.

@@ -10,7 +10,7 @@
         <version>1.0.0</version>
     </parent>
 
-    <artifactId>server</artifactId>
+    <artifactId>bitdreamit-dimension-transmission-server</artifactId>
     <packaging>jar</packaging>
     <name>bitdreamit-dimension-transmission-server</name>
     <description>Server-side transmission mode plugin: registers the Siemens Dimension
@@ -19,7 +19,7 @@
     <dependencies>
         <dependency>
             <groupId>com.bitdreamit.connect.plugins.transmission.dimension</groupId>
-            <artifactId>shared</artifactId>
+            <artifactId>bitdreamit-dimension-transmission-shared</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -42,5 +42,19 @@
 
     <build>
         <finalName>bitdreamit-dimension-transmission-server</finalName>
+        <plugins>
+            <plugin>
+                <artifactId>maven-jar-plugin</artifactId>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <Implementation-Title>bitdreamit-dimension-transmission-server</Implementation-Title>
+                            <Implementation-Version>${project.version}</Implementation-Version>
+                            <Implementation-Vendor>Bit Dream IT</Implementation-Vendor>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+        </plugins>
     </build>
 </project>

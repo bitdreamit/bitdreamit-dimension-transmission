@@ -28,13 +28,14 @@
         <miglayout.version>4.2</miglayout.version>
         <log4j12api.version>2.17.2</log4j12api.version>
         <junit.version>4.13.2</junit.version>
+        <hamcrest.version>1.3</hamcrest.version>
         <maven.compiler.source>1.8</maven.compiler.source>
         <maven.compiler.target>1.8</maven.compiler.target>
     </properties>
 
     <!--
         IMPORTANT (build prerequisites)
-        ------------------------------------------------------------------
+        ==================================================================
         Mirth Connect jars are not published to Maven Central, so each
         module pulls them in as `system`-scoped dependencies from a local
         folder, by default `${user.home}/mirth-libs/`. Override with
@@ -130,6 +131,12 @@
                 <version>${junit.version}</version>
                 <scope>test</scope>
             </dependency>
+            <dependency>
+                <groupId>org.hamcrest</groupId>
+                <artifactId>hamcrest-core</artifactId>
+                <version>${hamcrest.version}</version>
+                <scope>test</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -139,6 +146,10 @@
                 <plugin>
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>3.11.0</version>
+                    <configuration>
+                        <source>${maven.compiler.source}</source>
+                        <target>${maven.compiler.target}</target>
+                    </configuration>
                 </plugin>
                 <plugin>
                     <artifactId>maven-jar-plugin</artifactId>

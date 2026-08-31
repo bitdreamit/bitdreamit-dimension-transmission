@@ -10,7 +10,7 @@
         <version>1.0.0</version>
     </parent>
 
-    <artifactId>test</artifactId>
+    <artifactId>bitdreamit-dimension-transmission-test</artifactId>
     <packaging>jar</packaging>
     <name>bitdreamit-dimension-transmission-test</name>
     <description>Unit tests: frame checksum, round-trip and corruption handling.</description>
@@ -18,21 +18,27 @@
     <dependencies>
         <dependency>
             <groupId>com.bitdreamit.connect.plugins.transmission.dimension</groupId>
-            <artifactId>shared</artifactId>
+            <artifactId>bitdreamit-dimension-transmission-shared</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>com.bitdreamit.connect.plugins.transmission.dimension</groupId>
-            <artifactId>server</artifactId>
+            <artifactId>bitdreamit-dimension-transmission-server</artifactId>
             <version>${project.version}</version>
+        </dependency>
+        <!-- Purgable lives in donkey-server.jar; needed to resolve the
+             shared module's TransmissionModeProperties at compile time.
+             NOTE: system-scoped deps are NOT transitive in Maven, so the
+             Mirth jars used by the server module's classes (StreamHandler
+             supertype, log4j bridge) must be redeclared here for the test
+             compile classpath. -->
+        <dependency>
+            <groupId>com.mirth</groupId>
+            <artifactId>donkey-server</artifactId>
         </dependency>
         <dependency>
             <groupId>com.mirth</groupId>
             <artifactId>mirth-server</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>com.mirth</groupId>
-            <artifactId>donkey-server</artifactId>
         </dependency>
         <dependency>
             <groupId>com.mirth</groupId>
@@ -45,6 +51,10 @@
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.hamcrest</groupId>
+            <artifactId>hamcrest-core</artifactId>
         </dependency>
     </dependencies>
 

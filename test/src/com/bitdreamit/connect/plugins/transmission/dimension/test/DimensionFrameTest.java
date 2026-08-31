@@ -1,6 +1,5 @@
 package com.bitdreamit.connect.plugins.transmission.dimension.test;
 
-import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -12,7 +11,6 @@ import java.io.IOException;
 import org.junit.Test;
 
 import com.bitdreamit.connect.plugins.transmission.dimension.server.DimensionStreamHandler;
-import com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionConstants;
 import com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionTransmissionModeProperties;
 
 /**
