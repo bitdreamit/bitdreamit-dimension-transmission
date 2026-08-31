@@ -255,13 +255,42 @@ would never match a Dimension stream.
 | Instrument mode | What flows | Plugin configuration |
 |---|---|---|
 | **Send Only** | Results only, no polls | Defaults work; `Auto Result Acceptance` is harmless (no `M` is defined for Send Only — disable it to keep the line strictly DLC-only) |
-| **Send/Receive** | Polls + orders + results | Defaults: Poll→`N`, Result→ACK+`M\|A` |
-| **Send ID/Receive** | like Send/Receive + Query (`I`) | Defaults also answer `I` with `N`; disable `Auto Poll/Query Response` if your LIS downloads orders per barcode query |
+| **Send/Receive** | Polls + orders + results | Two options: defaults (`Auto Poll/Query Response` on) answer every `P` with `N`; or set it **off** and let the channel answer - transformer rev 8+ replies to a **conversational poll** (First Poll = 0, Request = 1, manual p. 1-8/1-24) with the next queued **Sample Request (D)** (or `N`), and never downloads on an initial/busy poll |
+| **Send ID/Receive** | like Send/Receive + Query (`I`) | With `Auto Poll/Query Response` off, transformer rev 7+ replies to `I` with a **Sample Request (D)** echoing the queried Sample # (manual p. 1-14) or `N` when unknown, via the `dimensionResponse` response-map variable |
 
 ### 5.4 Order download (optional, bidirectional sites)
 
-Build the `D` payload in a destination JavaScript step and send it through
-a **Serial Writer** / TCP Sender using the same transmission mode:
+Three supported paths:
+
+1. **Query-driven (Send ID/Receive):** with `Auto Poll/Query Response` off and
+   source Response = `dimensionResponse`, the source transformer builds the `D`
+   payload (Table 1-12) in `responseMap` for `I` queries - Mirth writes it back
+   on the SAME socket through the mode (framed + checksum + instrument ACK).
+   See `tools/dimension_result_transformer.js` (`QUERY_ORDERS` demo table,
+   replace with your LIS lookup).
+2. **Poll-driven (Send/Receive, rev 8):** the same response variable answers a
+   conversational poll with the next order. Push orders from any script:
+
+   ```javascript
+   var q = globalMap.get('dimensionOrderQueue') || [];
+   q.push({ sampleId: '043092011', patient: 'Doe,John', type: '1',
+            priority: '1', tests: ['GLU','CREA'] });
+   globalMap.put('dimensionOrderQueue', q);
+   ```
+
+   Each conversational poll (First Poll = 0, Request = 1) consumes the first
+   entry (a `java.util.List` from a database-reader channel works too); an
+   initial poll (First Poll = 1) or busy poll (Request = 0) always gets `N`
+   per the manual. Orders in the built-in demo table are downloaded at most
+   once per Mirth runtime (sent-markers prevent the 1-second re-poll loop,
+   p. 1-26). If the instrument rejects the download it answers `M\|R<reason>`
+   (Table 1-17) - the transformer logs the decoded reason.
+3. **Destination-driven (serial):** build the `D` payload in a destination
+   JavaScript step and send it through a **Serial Writer** using the same
+   transmission mode. Manual worked example (p. 1-11): `<STX>D<FS>0<FS>0<FS>A<FS>Doe,John<FS>012345<FS>2<FS><FS>0<FS>1<FS>**<FS>1<FS>2<FS>BUN<FS>CREA<FS>F5<ETX>`
+2. **Destination-driven (serial):** build the `D` payload in a destination
+   JavaScript step and send it through a **Serial Writer** using the same
+   transmission mode. Manual worked example (p. 1-11): `<STX>D<FS>0<FS>0<FS>A<FS>Doe,John<FS>012345<FS>2<FS><FS>0<FS>1<FS>**<FS>1<FS>2<FS>BUN<FS>CREA<FS>F5<ETX>`
 
 ```javascript
 // payload WITHOUT STX/ETX/checksum — the mode frames it and waits for ACK
@@ -302,10 +331,12 @@ Cup Position `**` for barcoded tubes, Dilution, #Tests, Test Names…)
 
 ## 7. Parsing the Result message in a transformer
 
-See `tools/dimension_result_transformer.js` for a complete, commented
+See `tools/dimension_result_transformer.js` (rev 8) for a complete, commented
 implementation that maps an `R` frame to an HL7 v2 `ORU^R01` (one OBX per
 test, error-code handling with the Appendix III/IV table, QC routing via
-Sample Type, `ssmmhhddmmyy` → HL7 TS conversion).
+Sample Type, `ssmmhhddmmyy` → HL7 TS conversion), answers `P`/`I` with `D`/`N`
+(order download), and decodes `M` Request Acceptances (Table 1-17) and
+`C` Calibration headers (Table 1-25).
 
 A matching offline tool, `tools/decode_dimension.py`, decodes raw captures
 or re-typed frames and verifies their checksums — handy when all you have

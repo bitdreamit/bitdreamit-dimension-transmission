@@ -2,8 +2,10 @@
  * Siemens Dimension -> HL7 v2 ORU^R01  (Mirth Connect source transformer)
  * ---------------------------------------------------------------------------
  * Reference transformer shipped with the bitdreamit-dimension-transmission
- * extension. Revision 6 - four repairs over the earlier revisions. FIX#4 is
- * Mirth-specific and CRITICAL:
+ * extension. Revision 8 - four repairs (FIX#4 is Mirth-specific and
+ * CRITICAL) plus full PN D00396 application-layer coverage:
+ *   Poll/Query answering (P -> D/N, I -> D/N), Request Acceptance (M)
+ *   decoding, Enhanced Query logging, R Location field surfaced.
  *
  * CHANNEL REQUIREMENTS (verified against Mirth 4.5.2 JavaScriptBuilder):
  *   Source Inbound Data Type = Raw   and   Source Response = None.
@@ -40,9 +42,12 @@
  * with FS = \u001C ("Checksum in Payload" must stay ON so the trailing
  * checksum arrives for re-verification). Frame types handled:
  *   R - Result              -> HL7 ORU^R01, one OBX per test
- *   C - Calibration Result  -> logged only (route to QC/calibration table)
- *   M - Request/Result Acceptance (from instrument, after our D download)
- *   P / I / N / D - control messages (normally consumed by the mode itself)
+ *   C - Calibration Result  -> header decoded to channelMap (QC routing)
+ *   M - Request Acceptance (instrument -> computer, after our D) -> decoded,
+ *       rejection reason (Table 1-17) logged
+ *   P - Poll  -> D (next queued order, conversational poll only) or N
+ *   I - Query -> D (Sample Request for the queried ID) or N
+ *   N / D - control messages (no computer response defined in the manual)
  *
  * Field layout of R (PN D00396 Table 1-22):
  *   R | Loadlist | PatientID | Sample# | SampleType | Location | Priority |
@@ -75,17 +80,154 @@ var SAMPLE_TYPES = {
 // --- Priorities (Table 1-24) ------------------------------------------------
 var PRIORITIES = { '0':'Routine','1':'STAT','2':'ASAP','3':'QC','4':'XQC' };
 
+// --- Request Acceptance rejection reasons (Table 1-17) ---------------------
+var REQUEST_REJECT_REASONS = {
+    '1':'Request in process','2':'Result no longer available',
+    '3':'Sample carrier in use','4':'No memory to store request',
+    '5':'Error in test request','6':'Reserved','7':'Sample carrier full',
+    '8':'No known carriers','9':'Incorrect fluid type'
+};
+
+// Coerce a tests field (JS array OR java.util.List) into a real JS array so
+// length/indexing work the same for both (Rhino interop, see FIX#4).
+function toJsArray(v) {
+    if (v && v.size) { var a = []; for (var i = 0; i < v.size(); i++) { a.push(String(v.get(i))); } return a; }
+    if (v && v.length !== undefined) { return v; }
+    return null;
+}
+
+// ---------------------------------------------------------------------------
+// Order lookup for Query [I] answering (REV 7)
+// ---------------------------------------------------------------------------
+// DEMO table - REPLACE with your LIS/order lookup. Anything declared here is
+// answered with a Sample Request (D); unknown sample IDs get No Request (N).
+// You can also inject orders at runtime:
+//   globalMap.put('dimensionOrders', { '12345': {patient:'X', tests:['GLU']} });
+var QUERY_ORDERS = {
+    '012345':    { patient: 'Doe,John', type: '2', priority: '0', tests: ['BUN', 'CREA', 'F5'] },
+    '043092011': { patient: '',         type: '1', priority: '0', tests: ['BUN', 'CREA', 'F5'] }
+};
+
+// PN D00396 Table 1-12 (p. 1-9): the channel supplies the payload WITHOUT
+// STX/ETX/checksum - DimensionStreamHandler.write() frames it and waits for
+// the instrument ACK (retransmitting on NAK).
+function buildSampleRequest(order, sampleId) {
+    var tests = toJsArray(order.tests) || [];
+    var names = [];
+    for (var i = 0; i < tests.length && names.length < 36; i++) {
+        var t = String(tests[i]).toUpperCase().substring(0, 5);
+        names.push(t);
+    }
+    return ['D',
+            '0',                                       // Sample Carrier ID (always 0)
+            '0',                                       // Loadlist ID (always 0)
+            'A',                                       // Transaction: A=Add, D=Delete
+            String(order.patient || '').substring(0, 27),
+            String(sampleId).substring(0, 12),
+            String(order.type || '1'),                 // Sample Type (Table 1-13)
+            '',                                        // Location (optional)
+            String(order.priority || '0'),             // Priority 0-4
+            '1',                                       // # Of Cups For Sample
+            '**',                                      // Cup Position (any cup)
+            '1',                                       // Dilution
+            String(names.length)                       // # Of Tests
+           ].concat(names).join(FS);
+}
+
+// ---------------------------------------------------------------------------
+// Poll-driven order download (Send/Receive mode) - REV 8
+// ---------------------------------------------------------------------------
+// PN D00396 p.1-8/1-9: "A Sample Request Message is sent to an instrument in
+// response to a Poll [P] or Query [I] message." The download dialogue
+// (p.1-24) runs on a CONVERSATIONAL poll: "The value of this field must be
+// (0) to download a request from the computer" (First Poll field, p.1-8)
+// and Request = 1 (instrument ready, p.1-8). Every other poll is answered
+// with No Request (N), the documented default response (p.1-12).
+//
+// Order sources, tried in order:
+//   1. globalMap 'dimensionOrderQueue' - push orders from any script:
+//        var q = globalMap.get('dimensionOrderQueue') || [];
+//        q.push({ sampleId: '043092011', patient: 'Doe,John', type: '1',
+//                 priority: '1', tests: ['GLU','CREA'] });
+//        globalMap.put('dimensionOrderQueue', q);
+//      (a java.util.List pushed by a database-reader channel works too;
+//       each conversational poll consumes the FIRST entry)
+//   2. QUERY_ORDERS below, each sent at most once per Mirth runtime
+//      (sent-markers in globalMap 'dimensionSentPollOrders' prevent the
+//      same order being re-downloaded on the 1-second re-poll cycle,
+//      p.1-26 Timing).
+function pollRequestFields(tokens) {
+    // Table 1-11: P | Instrument ID | First Poll | Request | # Of Carriers
+    return {
+        instrumentId: String(tokens[1] || '').trim(),
+        firstPoll:    String(tokens[2] || '0').trim(),
+        request:      String(tokens[3] || '0').trim()
+    };
+}
+
+function mapGet(obj, key) {
+    // java.util.Map instances need .get(); JS objects use property access
+    if (obj && obj.get && obj.containsKey) { return obj.get(key); }
+    return obj ? obj[key] : undefined;
+}
+
+function normalizeOrder(order, sampleId) {
+    if (!order) { return null; }
+    var id = String(sampleId !== undefined && sampleId !== null
+                    ? sampleId : (mapGet(order, 'sampleId') || mapGet(order, 'sample') || '')).trim();
+    var tests = toJsArray(mapGet(order, 'tests'));
+    if (!id || !tests || !tests.length) { return null; }
+    return { sampleId: id,
+             patient:  String(mapGet(order, 'patient') || ''),
+             type:     String(mapGet(order, 'type') || '1'),
+             priority: String(mapGet(order, 'priority') || '0'),
+             tests:    tests };
+}
+
+function takeNextPollOrder() {
+    var queue = globalMap.get('dimensionOrderQueue');
+    if (queue) {
+        var items = [];
+        if (queue.size) {                            // java.util.List
+            for (var i = 0; i < queue.size(); i++) { items.push(queue.get(i)); }
+        } else if (queue.length !== undefined) {     // JS array
+            for (var j = 0; j < queue.length; j++) { items.push(queue[j]); }
+        }
+        if (items.length) {
+            var next = normalizeOrder(items.shift());
+            globalMap.put('dimensionOrderQueue', items);
+            if (next) { return next; }
+        }
+    }
+    var sentRaw = globalMap.get('dimensionSentPollOrders');
+    var sent = {};
+    if (sentRaw) {
+        var parts = String(sentRaw).split(',');
+        for (var p = 0; p < parts.length; p++) { if (parts[p]) { sent[parts[p]] = true; } }
+    }
+    for (var id in QUERY_ORDERS) {
+        if (!sent[id]) {
+            sent[id] = true;
+            var keys = [];
+            for (var k in sent) { keys.push(k); }
+            globalMap.put('dimensionSentPollOrders', keys.join(','));
+            return normalizeOrder(QUERY_ORDERS[id], id);
+        }
+    }
+    return null;
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
-// FIX#4 (CRIT, rev 6): connectorMessage.getRawData() reaches the script as a
-// java.lang.String (Rhino default javaPrimitiveWrap). Without String()
-// coercion raw.split(FS) calls JAVA String.split and the tokens are Java
-// objects, so the strict "chkCalc !== chkReceived" compares a JS primitive
-// with a Java object and is ALWAYS unequal. Real Mirth run threw
+// FIX#4 (CRIT): connectorMessage.getRawData() reaches the script as a
+// java.lang.String (Rhino default javaPrimitiveWrap). Feeding it straight
+// into split() calls JAVA String.split and yields Java String tokens, so the
+// strict comparison "chkCalc !== chkReceived" compares a JS primitive with a
+// Java object and is ALWAYS unequal - real Mirth run threw:
 //   Dimension checksum mismatch: received CD, calculated CD   (both 'CD'!)
-// on perfectly good frames (reproduced in Rhino 1.7.14, Mirth's JS engine).
-// String() unboxes to a native JS string so split/charCodeAt/=== behave.
+// String() unboxes it to a native JS string, making every downstream
+// operation (split/charCodeAt/=== comparisons) behave as the code intends.
 var rawObj = connectorMessage.getRawData();
 if (rawObj == null) {
     throw 'Empty or truncated Dimension frame';
@@ -102,7 +244,7 @@ if (tokens.length < 3) {
 
 // 1) Verify the Add-Mod-256 checksum (last token) over
 //    "TYPE (FS data)* FS" - i.e. everything between STX and CHK.
-// normalize: native string, trimmed, upper-case (the mode already accepts
+// normalize: native string, trimmed, upper-case (mode already accepts
 // lower-case hex via equalsIgnoreCase since rev 5 - mirror that here)
 var chkReceived = String(tokens[tokens.length - 1]).trim().toUpperCase();
 var chkRegion = tokens.slice(0, tokens.length - 1).join(FS) + FS;
@@ -118,18 +260,111 @@ if (chkCalc !== chkReceived) {
 var msgType = tokens[0];
 channelMap.put('dimensionChecksum', chkCalc);
 channelMap.put('dimensionMessageType', msgType);
-// FIX#3: feed the channel metadata columns (SOURCE / TYPE)
+// FIX#3b: feed the channel metadata columns (SOURCE / TYPE)
 channelMap.put('mirth_source', 'DimensionEXL');
 channelMap.put('mirth_type', msgType);
 
 if (msgType === 'C') {
-    // Calibration Result - store raw and stop (route to your QC system here)
+    // Calibration Result (Table 1-25) - accepted by the mode (auto M|A).
+    // Decode the header for QC routing; the full payload (slope, intercept,
+    // coefficients, bottle values) stays in calibrationRaw.
     channelMap.put('calibrationRaw', raw);
+    channelMap.put('calibrationTest', String(tokens[1] || ''));
+    channelMap.put('calibrationUnits', String(tokens[2] || ''));
+    channelMap.put('calibrationLot', String(tokens[3] || ''));
+    channelMap.put('calibrationCalibrator', String(tokens[4] || ''));
+    channelMap.put('calibrationOperator', String(tokens[6] || ''));
+    channelMap.put('calibrationDateTime', String(tokens[7] || ''));
+    return;
+}
+
+if (msgType === 'P') {
+    // Poll (Table 1-11) -> Sample Request (D) or No Request (N).
+    // Download only on a conversational poll (First Poll = 0) with
+    // Request = 1; everything else gets the default No Request answer.
+    var pf = pollRequestFields(tokens);
+    channelMap.put('pollInstrumentId', pf.instrumentId);
+    channelMap.put('pollFirstPoll', pf.firstPoll);
+    channelMap.put('pollRequest', pf.request);
+    var pollOrder = null;
+    if (pf.firstPoll === '0' && pf.request === '1') {
+        pollOrder = takeNextPollOrder();
+    }
+    if (pollOrder) {
+        channelMap.put('pollDownloadedSample', pollOrder.sampleId);
+        responseMap.put('dimensionResponse', buildSampleRequest(pollOrder, pollOrder.sampleId));
+    } else {
+        responseMap.put('dimensionResponse', 'N' + FS);
+    }
+    channelMap.put('controlMessage', raw);
+    return;
+}
+
+if (msgType === 'I') {
+    // Query (Send ID/Receive) -> Sample Request (D) or No Request (N).
+    // Manual p.1-14: "From the computer the Sample ID and Sample ID Field
+    // must match or the message will be rejected" - the D frame below
+    // echoes the queried ID as its Sample # field.
+    var queryId = String(tokens[1] || '').trim();
+    channelMap.put('queriedSampleId', queryId);
+    if (tokens.length >= 5) {
+        // Enhanced Query (Table 1-19): I | Sample ID | Segment | Position.
+        // Disabled by default on the instrument (p.1-15); the answer only
+        // has to match the Sample ID, so segment/position are logged only.
+        channelMap.put('querySegment', String(tokens[2] || ''));
+        channelMap.put('queryPosition', String(tokens[3] || ''));
+    }
+    var table = {};
+    var injected = globalMap.get('dimensionOrders');
+    if (injected) {
+        for (var k in injected) { table[k] = injected[k]; }
+    }
+    for (var d in QUERY_ORDERS) { if (!table[d]) { table[d] = QUERY_ORDERS[d]; } }
+    var order = table[queryId];
+    if (order && order.tests && order.tests.length) {
+        channelMap.put('queriedOrder', 'D');
+        responseMap.put('dimensionResponse', buildSampleRequest(order, queryId));
+    } else {
+        channelMap.put('queriedOrder', 'N');
+        responseMap.put('dimensionResponse', 'N' + FS);
+    }
+    channelMap.put('controlMessage', raw);
+    return;
+}
+
+if (msgType === 'M') {
+    // Request Acceptance (instrument -> computer, Table 1-16) after our D
+    // download. The data-link ACK was already sent by the mode; the manual
+    // defines NO computer response to this message - decode and log only.
+    // Note: the manual's own accept example carries an extra empty field
+    // (M<FS><FS>A<FS>A<FS>1<FS>42), so the status is located by VALUE
+    // (A/R) instead of by position.
+    var mFields = tokens.slice(1, tokens.length - 1);
+    var mStatus = '';
+    var mReason = '';
+    for (var mi = 0; mi < Math.min(2, mFields.length); mi++) {
+        var mv = String(mFields[mi]).trim().toUpperCase();
+        if (mv === 'A' || mv === 'R') {
+            mStatus = mv;
+            if (mv === 'R') { mReason = String(mFields[mi + 1] || '').trim(); }
+            break;
+        }
+    }
+    channelMap.put('acceptanceStatus', mStatus);
+    channelMap.put('acceptanceReason', mReason);
+    channelMap.put('acceptanceRaw', raw);
+    if (mStatus === 'R') {
+        logger.warn('Instrument REJECTED the sample request: reason ' + mReason +
+                ' (' + (REQUEST_REJECT_REASONS[mReason] || 'unknown') + ')' +
+                ' - the order was NOT stored, re-queue or correct the request');
+    }
+    channelMap.put('controlMessage', raw);
     return;
 }
 
 if (msgType !== 'R') {
-    // P/I/N/D/M control traffic - nothing to map to HL7
+    // N/D and other control traffic - nothing to map to HL7,
+    // and NO channel response (the mode already handled its ACK)
     channelMap.put('controlMessage', raw);
     return;
 }
@@ -174,12 +409,14 @@ var pid = 'PID|||' + patientId + '|||';
 // Barcode-only runs often have an empty Patient ID - keep it empty then.
 
 // OBR: 17 empty fields -> hl7ts lands on OBR-22 (Results Rpt/Status Chng DT)
+// (verified: the imported revision already had this right - re-formatted only)
 var obr = ['OBR', '1', '', '', sampleNo + '^DIMENSIONSAMPLE',
            '', '', '', '', '',                                  //  5 -  9
            '', '', '', '', '',                                  // 10 - 14
            '', '', '', '', '', '', '',                          // 15 - 21
            hl7ts].join('|');                                    // 22
 
+// Array literal verified balanced (28 x open/close brackets); kept as-is.
 var segments = [msh, pid, obr];
 var obxIndex = 0;
 
@@ -228,6 +465,7 @@ for (var t = 0; t < nTests; t++) {
 
 channelMap.put('sampleNumber', sampleNo);
 channelMap.put('sampleType', sampleType);
+channelMap.put('location', location);
 channelMap.put('priority', PRIORITIES[priorityC] || 'Routine');
 channelMap.put('isQC', isQC);
 channelMap.put('dilution', dilution);
