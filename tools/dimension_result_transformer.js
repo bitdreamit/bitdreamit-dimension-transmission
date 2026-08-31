@@ -2,7 +2,8 @@
  * Siemens Dimension -> HL7 v2 ORU^R01  (Mirth Connect source transformer)
  * ---------------------------------------------------------------------------
  * Reference transformer shipped with the bitdreamit-dimension-transmission
- * extension. Revision 5 - three repairs over the earlier revision:
+ * extension. Revision 6 - four repairs over the earlier revisions. FIX#4 is
+ * Mirth-specific and CRITICAL:
  *
  * CHANNEL REQUIREMENTS (verified against Mirth 4.5.2 JavaScriptBuilder):
  *   Source Inbound Data Type = Raw   and   Source Response = None.
@@ -26,6 +27,10 @@
  *                datetime; 'F' was on OBX-9 and the date on OBX-13.
  *   FIX#3 (LOW)  Metadata columns SOURCE / TYPE are now filled
  *                (channelMap 'mirth_source' / 'mirth_type').
+ *   FIX#4 (CRIT) Java String vs JS string. getRawData() arrives as a
+ *                java.lang.String; un-coerced strict comparisons against
+ *                split() tokens are object-vs-primitive and ALWAYS fail
+ *                ('received CD, calculated CD'). Coerce once with String().
  *
  * Expects the RAW payload dispatched by the bitdreamit-dimension-transmission
  * mode: everything between <STX> and <ETX>, i.e.
@@ -73,8 +78,20 @@ var PRIORITIES = { '0':'Routine','1':'STAT','2':'ASAP','3':'QC','4':'XQC' };
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
-var raw = connectorMessage.getRawData();
-if (raw == null || raw.length < 3) {
+// FIX#4 (CRIT, rev 6): connectorMessage.getRawData() reaches the script as a
+// java.lang.String (Rhino default javaPrimitiveWrap). Without String()
+// coercion raw.split(FS) calls JAVA String.split and the tokens are Java
+// objects, so the strict "chkCalc !== chkReceived" compares a JS primitive
+// with a Java object and is ALWAYS unequal. Real Mirth run threw
+//   Dimension checksum mismatch: received CD, calculated CD   (both 'CD'!)
+// on perfectly good frames (reproduced in Rhino 1.7.14, Mirth's JS engine).
+// String() unboxes to a native JS string so split/charCodeAt/=== behave.
+var rawObj = connectorMessage.getRawData();
+if (rawObj == null) {
+    throw 'Empty or truncated Dimension frame';
+}
+var raw = String(rawObj);
+if (raw.length < 3) {
     throw 'Empty or truncated Dimension frame';
 }
 
@@ -85,7 +102,9 @@ if (tokens.length < 3) {
 
 // 1) Verify the Add-Mod-256 checksum (last token) over
 //    "TYPE (FS data)* FS" - i.e. everything between STX and CHK.
-var chkReceived = tokens[tokens.length - 1];
+// normalize: native string, trimmed, upper-case (the mode already accepts
+// lower-case hex via equalsIgnoreCase since rev 5 - mirror that here)
+var chkReceived = String(tokens[tokens.length - 1]).trim().toUpperCase();
 var chkRegion = tokens.slice(0, tokens.length - 1).join(FS) + FS;
 var sum = 0;
 for (var i = 0; i < chkRegion.length; i++) {
