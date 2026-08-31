@@ -226,7 +226,7 @@ Mirth channel:
 | Port | e.g. `COM3` / `/dev/ttyUSB0` (9600, 8, N, 1, no flow control) |
 | Transmission Mode | **Siemens Dimension** (wrench icon → frame settings) |
 | Connector commit-ACK / MLLPv2 option | **OFF** (the mode sends the ACK itself — double-ACK confuses the instrument) |
-| Source data type | Raw |
+| Source data type | **Raw** — both Inbound **and** Outbound on the source transformer (Outbound HL7 V2.x makes Mirth run the string output through `ER7Serializer.fromXML` → `Content is not allowed in prolog`) |
 | Source transformer | see `tools/dimension_result_transformer.js` |
 | Response | **None** — auto responses are handled inside the mode |
 
@@ -245,7 +245,7 @@ server mode, or the site already runs a TCP link:
 | Source connector | TCP Listener |
 | Transmission Mode | **Siemens Dimension** |
 | Response | None |
-| Data type | Raw |
+| Data type | **Raw** — Inbound **and** Outbound |
 
 The mode frames `<STX>…<ETX>` on the socket — stock MLLP (`<VT>…<FS><CR>`)
 would never match a Dimension stream.
@@ -327,6 +327,8 @@ is a PuTTY-style paste where STX/FS/ETX are invisible.
 | Message Source tab shows a flattened blob like `R0DOE,JOHN10011ER1...CD` with no delimiters | **Normal display** — `<FS>` (0x1C) is a non-printable control character, so the Administrator renders the fields stuck together. Export the message and check the RAW `content`: the `&#x1c;` entities are the field separators and the payload is intact |
 | Every message ends **ERROR** with `Transformer error ... TypeError: Element type "R" must be followed by either attribute specifications, ">" or "/>"` | Source **Inbound Data Type is HL7 V2.x (or XML)**. Mirth pre-serializes the non-HL7 payload to `<HL7Message><R&#x1c;0&#x1c;...></R&#x1c;...></HL7Message>` — `0x1C` is illegal in an XML tag name — and the generated prelude `msg = new XML(connectorMessage.getTransformedData());` crashes before your script runs. Fix: **Source → Set Data Types → Inbound Data Type = Raw** and **Response = None** (Mirth then passes the payload as a plain string). See section 5 tables |
 | Checksum error **`Dimension checksum mismatch: received CD, calculated CD`** (identical values!) with Inbound Data Type = Raw | The transformer compared a **java.lang.String** token with a native JS string using `!==` — strict comparison never coerces, so object vs primitive is always unequal even when both print as `CD`. Fixed in reference transformer **rev 6** (`String()` coercion of `getRawData()`); or add `var raw = String(connectorMessage.getRawData());` to your own script |
+| Transformed Data shows the correct ORU but the message is **ERROR** with `ER7Serializer error - Error converting XML to ER7 ... Content is not allowed in prolog` | Source **Outbound** Data Type is HL7 V2.x: after the transformer Mirth converts the string output with `ER7Serializer.fromXML()` (see `FilterTransformerExecutor`), and plain ER7 is not XML. Set **Outbound Data Type = Raw** on the source transformer (destinations can stay HL7 V2.x — they receive valid ER7) |
+| Log shows `SocketException: Socket closed` at `DimensionStreamHandler.read` when a client disconnects or the channel is redeployed | Benign disconnect noise — since plugin build 2026-08 the handler converts it to a clean EOF (logged at INFO). Older builds just log it at ERROR; safe to ignore |
 | Poll storm (`P` every 15 s) in logs | Normal idle behaviour; `Auto Poll/Query Response` answers it with `N` |
 
 ---

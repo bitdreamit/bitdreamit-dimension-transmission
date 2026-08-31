@@ -3,6 +3,7 @@ package com.bitdreamit.connect.plugins.transmission.dimension.server;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.SocketException;
 import java.io.OutputStream;
 import java.io.PushbackInputStream;
 import java.util.Arrays;
@@ -92,7 +93,19 @@ public class DimensionStreamHandler extends StreamHandler {
                 throw new IOException("Dimension frame timeout");
             }
 
-            int b = in.read();
+            int b;
+            try {
+                b = in.read();
+            } catch (SocketException e) {
+                // The instrument (or the Administrator, on a channel
+                // redeploy/stop) closed the TCP connection while this thread
+                // was blocked waiting for the next frame. That is a normal
+                // disconnect, not a protocol error: return a clean EOF instead
+                // of letting TcpReceiver log "SocketException: Socket closed"
+                // at ERROR level on every disconnect.
+                logger.info("Dimension socket closed while waiting for a frame - clean disconnect");
+                return null;
+            }
 
             if (b == -1) {
                 if (inFrame) {
