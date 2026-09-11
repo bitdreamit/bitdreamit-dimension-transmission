@@ -157,9 +157,11 @@ public class DimensionFrameTest {
     // Redesign rev 10: dynamic bidirectional order download
     // ==================================================================
 
-    /** Sample Request (D) payload for the shared test order. */
+    /** Sample Request (D) payload for the shared test order.
+     *  v2.0.2: ends with the trailing FS - the documented PN D00396 Table 1-7
+     *  layout (checksum covers it, same as every example frame in the manual). */
     private static final String D_PAYLOAD =
-            "D\u001C0\u001C0\u001CA\u001CDOE,JOHN\u001C043092011\u001C1\u001C\u001C1\u001C1\u001C**\u001C1\u001C3\u001CBUN\u001CCREA\u001CF5";
+            "D\u001C0\u001C0\u001CA\u001CDOE,JOHN\u001C043092011\u001C1\u001C\u001C1\u001C1\u001C**\u001C1\u001C3\u001CBUN\u001CCREA\u001CF5\u001C";
 
     @Test
     public void testQueryBarcodeDownloadsQueuedOrder() throws IOException {
@@ -210,12 +212,12 @@ public class DimensionFrameTest {
         handler.read(); // poll 1 -> D(012345)
         String w1 = out.toString("US-ASCII");
         assertTrue("first conversational poll must download 012345",
-                w1.contains(frame("D\u001C0\u001C0\u001CA\u001CDoe,John\u001C012345\u001C2\u001C\u001C0\u001C1\u001C**\u001C1\u001C2\u001CBUN\u001CCREA")));
+                w1.contains(frame("D\u001C0\u001C0\u001CA\u001CDoe,John\u001C012345\u001C2\u001C\u001C0\u001C1\u001C**\u001C1\u001C2\u001CBUN\u001CCREA\u001C")));
 
         handler.read(); // poll 2 -> D(555555)
         String w2 = out.toString("US-ASCII");
         assertTrue("second conversational poll must download 555555 (FIFO)",
-                w2.contains(frame("D\u001C0\u001C0\u001CA\u001CX,Y\u001C555555\u001C1\u001C\u001C1\u001C1\u001C**\u001C1\u001C1\u001CGLU")));
+                w2.contains(frame("D\u001C0\u001C0\u001CA\u001CX,Y\u001C555555\u001C1\u001C\u001C1\u001C1\u001C**\u001C1\u001C1\u001CGLU\u001C")));
 
         handler.read(); // poll 3 (queue empty) -> N
         handler.read(); // plain poll -> N (never downloads)

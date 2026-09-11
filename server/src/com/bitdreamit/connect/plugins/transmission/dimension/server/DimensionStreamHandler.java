@@ -364,9 +364,30 @@ public class DimensionStreamHandler extends StreamHandler {
                 order.getPriority(), order.getTests());
     }
 
-    /** Splits the payload (TYPE + trailing checksum included) on FS and trims every field. */
-    private static String[] splitFields(byte[] payload) {
+    /**
+     * Splits the payload (TYPE + trailing checksum included) on FS and trims
+     * every field.
+     *
+     * Tolerant-parse hardening (serial-transport verification, 2025-09):
+     * the documented PN D00396 layout always ends the body with a trailing FS
+     * before the 2 checksum characters, but the two checksum bytes glue onto
+     * the last field when an analyzer omits that FS (or when the checksum is
+     * disabled but the frame still carries separators inconsistently). To keep
+     * Sample-ID matching exact (manual p.1-14: IDs must match or the message
+     * is rejected) we strip a trailing checksum and normalize a missing
+     * trailing FS before splitting - same tolerance as the serial connector's
+     * built-in DimensionProvider.
+     */
+    private String[] splitFields(byte[] payload) {
         String s = new String(payload, java.nio.charset.StandardCharsets.US_ASCII);
+
+        if (props.isUseChecksum() && props.isIncludeChecksumInPayload() && s.length() > 2) {
+            s = s.substring(0, s.length() - 2);     // drop glued-on checksum chars
+        }
+        if (s.length() > 0 && s.charAt(s.length() - 1) != FS_CH) {
+            s = s + FS_CH;                          // normalize to the documented layout
+        }
+
         String[] parts = s.split("\u001C");
         for (int i = 0; i < parts.length; i++) {
             parts[i] = parts[i].trim();
@@ -381,6 +402,32 @@ public class DimensionStreamHandler extends StreamHandler {
     /** FS as a char constant for payload building. */
     private static final char FS_CH = 0x1C;
 
+    /**
+     * PN D00396 Table 1-7 (p.1-5, General Message): the transmitted body is
+     * {@code STX | TYPE | FS | Data | FS | CHK | ETX} - it ALWAYS ends with a
+     * trailing field separator before the 2 checksum characters, and the
+     * checksum (p.1-6) is computed on ALL characters between STX and CHK
+     * INCLUDING that trailing FS. Every example frame in the manual ends with
+     * {@code <FS>CHK} (verified byte-exact: N=6A, M-A=E2, M-R-1=24, and the
+     * field captures P...47 / R...43). Frames that omit it may still pass the
+     * receiver's DLC re-check (the sum covers whatever was sent), but they are
+     * NOT the documented layout, so analyzers with a strict application
+     * parser can reject them (error 319, "invalid message"). This guard makes
+     * every frame this handler transmits byte-exact with the documentation.
+     */
+    static byte[] normalizeBody(byte[] body) {
+        if (body == null || body.length == 0) {
+            return body;
+        }
+        if (body[body.length - 1] == 0x1C) {
+            return body;
+        }
+        byte[] out = new byte[body.length + 1];
+        System.arraycopy(body, 0, out, 0, body.length);
+        out[body.length] = 0x1C;
+        return out;
+    }
+
     // ==================================================================
     // WRITE (send one frame to the instrument, e.g. Sample Request "D")
     // ==================================================================
@@ -390,6 +437,7 @@ public class DimensionStreamHandler extends StreamHandler {
         if (data == null || data.length == 0) {
             throw new IOException("Cannot write empty Dimension payload");
         }
+        data = normalizeBody(data);
 
         // The channel supplies the payload WITHOUT STX/ETX/checksum, e.g.
         // "D<FS>0<FS>0<FS>A<FS>Doe,John<FS>012345<FS>2<FS>...".
@@ -412,6 +460,8 @@ public class DimensionStreamHandler extends StreamHandler {
                 frame.write(calculateChecksum(data).getBytes("US-ASCII"));
             }
             frame.write(props.getEndOfFrameByte());
+            // (data was normalized by normalizeBody: trailing FS present, so the
+            // checksum covers it exactly like every PN D00396 example frame.)
 
             outputStream.write(frame.toByteArray());
             outputStream.flush();
@@ -499,7 +549,7 @@ public class DimensionStreamHandler extends StreamHandler {
      * the instrument's data-link ACK.
      */
     private void sendApplicationFrame(String payload) throws IOException {
-        byte[] payloadBytes = payload.getBytes("US-ASCII");
+        byte[] payloadBytes = normalizeBody(payload.getBytes("US-ASCII"));
 
         ByteArrayOutputStream frame = new ByteArrayOutputStream();
         frame.write(props.getStartOfFrameByte());
