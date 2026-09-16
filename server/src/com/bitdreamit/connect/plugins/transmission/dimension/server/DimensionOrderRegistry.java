@@ -72,6 +72,44 @@ public final class DimensionOrderRegistry {
     private static final ConcurrentHashMap<String, ConcurrentLinkedQueue<DimensionOrder>> QUEUES =
             new ConcurrentHashMap<String, ConcurrentLinkedQueue<DimensionOrder>>();
 
+    /**
+     * Pending DELETE downloads (PN D00396 Table 1-12 Transaction = 'D').
+     * The manual: "A request can only be deleted BEFORE processing starts;
+     * resend the full request with D in the Transaction field." Each entry
+     * carries the full original order so the delete frame is a byte-legal
+     * D message (Sample ID + tests are mandatory even for a delete).
+     */
+    private static final ConcurrentHashMap<String, ConcurrentLinkedQueue<DimensionOrder>> DELETE_QUEUES =
+            new ConcurrentHashMap<String, ConcurrentLinkedQueue<DimensionOrder>>();
+
+    /**
+     * Download bookkeeping: the most recently DOWNLOADED order per queue key
+     * (the D frame was sent but no Request Acceptance [M] seen yet). The M
+     * frame carries NO sample ID, so acceptance bookkeeping works on the
+     * "most recent download per key" model - which matches the wire reality,
+     * because the instrument answers each download with exactly one M frame
+     * in the same dialogue before the next one starts.
+     */
+    private static final ConcurrentHashMap<String, InFlight> IN_FLIGHT =
+            new ConcurrentHashMap<String, InFlight>();
+
+    /** One downloaded-but-not-yet-accepted order. */
+    public static final class InFlight {
+        public final DimensionOrder order;
+        public final long downloadedAt;
+        public volatile String status;      // PENDING / ACCEPTED / REJECTED
+        public volatile String rejectReason;
+        InFlight(DimensionOrder order) {
+            this.order = order;
+            this.downloadedAt = System.currentTimeMillis();
+            this.status = "PENDING";
+        }
+    }
+
+    /** Orders whose Sample Request was REJECTED by the instrument (diagnostics). */
+    private static final ConcurrentHashMap<String, List<InFlight>> REJECTED =
+            new ConcurrentHashMap<String, List<InFlight>>();
+
     private static final ConcurrentHashMap<String, Boolean> DEMO_SEEDED =
             new ConcurrentHashMap<String, Boolean>();
 
@@ -184,6 +222,138 @@ public final class DimensionOrderRegistry {
     }
 
     // ------------------------------------------------------------------
+    // DELETE API (PN D00396 Table 1-12, Transaction = 'D')
+    // ------------------------------------------------------------------
+
+    /**
+     * Queues a DELETE for an already-downloaded order. Per the manual the
+     * delete must "resend the full request with D in the Transaction field",
+     * so the same fields as an add are required (Sample ID + at least one
+     * test name). The delete goes out on the NEXT conversational Poll [P] -
+     * deletes can only be sent when the instrument asks (Request = 1).
+     *
+     * @throws IllegalArgumentException when no usable order is supplied
+     */
+    public static DimensionOrder pushDelete(String key, String sampleId,
+                                            String patient, String type,
+                                            String priority, String testsCsv) {
+        List<String> tests = new ArrayList<String>();
+        if (testsCsv != null && !testsCsv.trim().isEmpty()) {
+            for (String t : testsCsv.split("[,;]")) {
+                if (!t.trim().isEmpty()) { tests.add(t.trim()); }
+            }
+        }
+        DimensionOrder order = normalize(sampleId, patient, type, priority, tests);
+        if (order == null) {
+            throw new IllegalArgumentException(
+                    "Dimension delete needs a sample ID and the original test list");
+        }
+        deleteQueue(key).add(order);
+        logger.info("Dimension DELETE queued: key=" + key + " " + order);
+        return order;
+    }
+
+    /** FIFO pop of the next pending delete - used by the poll answer path. */
+    public static DimensionOrder takeNextDelete(String key) {
+        DimensionOrder o = deleteQueue(key).poll();
+        if (o != null) { logger.info("Dimension DELETE taken (FIFO): " + o); }
+        return o;
+    }
+
+    public static int deleteQueueSize(String key) { return deleteQueue(key).size(); }
+
+    // ------------------------------------------------------------------
+    // DOWNLOAD BOOKKEEPING (Request Acceptance [M] follow-up)
+    // ------------------------------------------------------------------
+
+    /**
+     * Marks an order as DOWNLOADED (its Sample Request [D] was just sent).
+     * Called by the stream handler right after the frame left the wire.
+     * The entry stays PENDING until the transformer sees the instrument's
+     * Request Acceptance [M] and calls {@link #confirmLastDownload(String)}
+     * or {@link #rejectLastDownload(String, String)}.
+     */
+    public static void markDownloaded(String key, DimensionOrder order) {
+        if (order == null) { return; }
+        String k = normalizeKey(key);
+        IN_FLIGHT.put(k, new InFlight(order));
+        logger.info("Dimension download in flight: key=" + k + " " + order);
+    }
+
+    /**
+     * Request Acceptance [M] with Status = 'A' arrived: the instrument
+     * STORED the last download. Confirms (and clears) the in-flight entry.
+     *
+     * @param key queue key; null/"default" resolves to "default"
+     * @return the confirmed order, or null when nothing was in flight
+     */
+    public static DimensionOrder confirmLastDownload(String key) {
+        String k = normalizeKey(key);
+        InFlight f = IN_FLIGHT.remove(k);
+        if (f == null) { return null; }
+        f.status = "ACCEPTED";
+        logger.info("Dimension download ACCEPTED by instrument: " + f.order);
+        return f.order;
+    }
+
+    /**
+     * Request Acceptance [M] with Status = 'R' arrived: the instrument
+     * REFUSED the last download (Table 1-17 reason). The order is moved to
+     * the rejected list for diagnostics - it is NOT silently lost and NOT
+     * blindly re-sent (a rejected request would be rejected again; per the
+     * manual the LIS must correct or re-queue it deliberately).
+     *
+     * @param reason Table 1-17 rejection reason code ('1'..'9', may be empty)
+     * @return the rejected order, or null when nothing was in flight
+     */
+    public static DimensionOrder rejectLastDownload(String key, String reason) {
+        String k = normalizeKey(key);
+        InFlight f = IN_FLIGHT.remove(k);
+        if (f == null) { return null; }
+        f.status = "REJECTED";
+        f.rejectReason = reason == null ? "" : reason.trim();
+        List<InFlight> list = REJECTED.get(k);
+        if (list == null) {
+            list = java.util.Collections.synchronizedList(new ArrayList<InFlight>());
+            REJECTED.put(k, list);
+        }
+        list.add(f);
+        logger.error("Dimension download REJECTED by instrument: reason=" + f.rejectReason
+                + " order=" + f.order + " - order NOT stored on instrument; correct it "
+                + "and push again (pushOrder) or check test mnemonics/sample type");
+        return f.order;
+    }
+
+    /** Most recent in-flight download for the key (or null). */
+    public static InFlight getInFlight(String key) {
+        return IN_FLIGHT.get(normalizeKey(key));
+    }
+
+    /** Rejected downloads for the key, most recent last (diagnostics). */
+    public static List<InFlight> getRejected(String key) {
+        List<InFlight> list = REJECTED.get(normalizeKey(key));
+        return list == null ? new ArrayList<InFlight>() : new ArrayList<InFlight>(list);
+    }
+
+    /**
+     * Re-queues a previously REJECTED order (e.g. after fixing a test
+     * mnemonic in the LIS). Convenience over {@link #pushOrder(String, String, String, String, String, String)}.
+     */
+    public static DimensionOrder requeueOrder(String key, DimensionOrder order) {
+        if (order == null) {
+            throw new IllegalArgumentException("cannot requeue a null order");
+        }
+        DimensionOrder copy = normalize(order.getSampleId(), order.getPatient(),
+                order.getType(), order.getPriority(), order.getTests());
+        if (copy == null) {
+            throw new IllegalArgumentException("order has no sample ID or tests");
+        }
+        queue(key).add(copy);
+        logger.info("Dimension order re-queued: key=" + key + " " + copy);
+        return copy;
+    }
+
+    // ------------------------------------------------------------------
     // TAKE API (called by DimensionStreamHandler in the read path)
     // ------------------------------------------------------------------
 
@@ -218,10 +388,14 @@ public final class DimensionOrderRegistry {
 
     public static int queueSize(String key) { return queue(key).size(); }
 
-    /** Drops every queued order for the key (maintenance/testing). */
+    /** Drops every queued order AND every pending delete for the key (maintenance/testing). */
     public static void clear(String key) {
-        queue(key).clear();
-        logger.info("Dimension order queue cleared: key=" + key);
+        String k = normalizeKey(key);
+        queue(k).clear();
+        deleteQueue(k).clear();
+        IN_FLIGHT.remove(k);
+        REJECTED.remove(k);
+        logger.info("Dimension order queue cleared: key=" + k);
     }
 
     // ------------------------------------------------------------------
@@ -250,7 +424,7 @@ public final class DimensionOrderRegistry {
     // ------------------------------------------------------------------
 
     private static ConcurrentLinkedQueue<DimensionOrder> queue(String key) {
-        String k = (key == null || key.trim().isEmpty()) ? DEFAULT_KEY : key.trim();
+        String k = normalizeKey(key);
         ConcurrentLinkedQueue<DimensionOrder> q = QUEUES.get(k);
         if (q == null) {
             q = new ConcurrentLinkedQueue<DimensionOrder>();
@@ -258,6 +432,21 @@ public final class DimensionOrderRegistry {
             if (prev != null) { q = prev; }
         }
         return q;
+    }
+
+    private static ConcurrentLinkedQueue<DimensionOrder> deleteQueue(String key) {
+        String k = normalizeKey(key);
+        ConcurrentLinkedQueue<DimensionOrder> q = DELETE_QUEUES.get(k);
+        if (q == null) {
+            q = new ConcurrentLinkedQueue<DimensionOrder>();
+            ConcurrentLinkedQueue<DimensionOrder> prev = DELETE_QUEUES.putIfAbsent(k, q);
+            if (prev != null) { q = prev; }
+        }
+        return q;
+    }
+
+    private static String normalizeKey(String key) {
+        return (key == null || key.trim().isEmpty()) ? DEFAULT_KEY : key.trim();
     }
 
     private static DimensionOrder normalize(String sampleId, String patient,

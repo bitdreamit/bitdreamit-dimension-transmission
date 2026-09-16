@@ -1,18 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <pluginMetaData path="bitdreamit-dimension-transmission">
-	<name>Siemens Dimension Transmission Mode</name>
-	<author>Bit Dream IT</author>
-	<pluginVersion>2.0.0</pluginVersion>
-	<mirthVersion>4.5.2</mirthVersion>
-	<url>https://bitdreamit.com</url>
-	<description>This plugin provides a Siemens Dimension native host-interface transmission mode for socket/serial connectors.</description>
-	<serverClasses>
-		<string>com.bitdreamit.connect.plugins.transmission.dimension.server.DimensionTransmissionModePlugin</string>
-	</serverClasses>
-	<clientClasses>
-		<string>com.bitdreamit.connect.plugins.transmission.dimension.client.DimensionTransmissionModeClientPlugin</string>
-	</clientClasses>
-	<library type="CLIENT" path="bitdreamit-dimension-transmission-client.jar" />
-	<library type="SERVER" path="bitdreamit-dimension-transmission-server.jar" />
-	<library type="SHARED" path="bitdreamit-dimension-transmission-shared.jar" />
+        <name>Siemens Dimension Transmission Mode</name>
+        <author>Bit Dream IT</author>
+        <pluginVersion>2.2.0</pluginVersion>
+        <mirthVersion>4.5.2</mirthVersion>
+        <url>https://bitdreamit.com</url>
+        <description>This plugin provides a Siemens Dimension native host-interface transmission mode for socket/serial connectors. v2.2.0: optional Message Output Format = HL7_V2 converts every frame to standard HL7 v2.x before dispatch (R->ORU^R01, I->QRY^A19, C->ORU QC, M->ACK) so channel transformers read msg['OBX']... exactly like ASTM/HL7 channels.</description>
+        <serverClasses>
+                <string>com.bitdreamit.connect.plugins.transmission.dimension.server.DimensionTransmissionModePlugin</string>
+        </serverClasses>
+        <clientClasses>
+                <string>com.bitdreamit.connect.plugins.transmission.dimension.client.DimensionTransmissionModeClientPlugin</string>
+        </clientClasses>
+        <library type="CLIENT" path="bitdreamit-dimension-transmission-client.jar" />
+        <library type="SERVER" path="bitdreamit-dimension-transmission-server.jar" />
+        <library type="SHARED" path="bitdreamit-dimension-transmission-shared.jar" />
 </pluginMetaData>

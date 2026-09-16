@@ -86,8 +86,27 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
      * When true the dispatched message still carries the trailing 2-character
      * checksum (payload as received, without STX/ETX). The channel transformer
      * can re-verify it. When false the checksum is stripped before dispatch.
+     * (Applies to RAW_FRAME output; the HL7_V2 translator always consumes the
+     * checksum internally.)
      */
     private boolean includeChecksumInPayload = true;
+
+    /**
+     * Message output format of the dispatched source message
+     * (v2.2.0, the "ASTM transmission" pattern):
+     * <ul>
+     *   <li>{@code RAW_FRAME} (default, pre-2.2 behavior) - the channel
+     *       receives the raw Dimension frame payload (TYPE FS data FS CHK);
+     *       the transformer does all parsing. Inbound data type must be Raw.</li>
+     *   <li>{@code HL7_V2} - the plugin converts every frame to a standard
+     *       HL7 v2.x message (R-&gt;ORU^R01, I-&gt;QRY^A19, C-&gt;ORU^R01 QC,
+     *       M-&gt;ACK^D01, P/N-&gt;ACK) BEFORE dispatch, so the channel uses the
+     *       normal HL7 V2.x data type and the transformer reads
+     *       {@code msg['OBX']['OBX.3']['OBX.3.1']} exactly like an ASTM/HL7
+     *       channel. See {@code DimensionHL7Translator}.</li>
+     * </ul>
+     */
+    private String  messageOutputFormat = com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format.RAW_FRAME;
 
     // --- Mode ---
     private boolean serverMode = true; // true = listener/receiver, false = sender
@@ -129,7 +148,8 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
         props.put("autoEnqAck",              new DataTypePropertyDescriptor(autoEnqAck,                    "Auto ENQ Acknowledge",          "Answer a stray ENQ from the instrument with ACK.", PropertyEditorType.BOOLEAN));
         props.put("orderLookupEnabled",      new DataTypePropertyDescriptor(orderLookupEnabled,            "Dynamic Order Lookup",          "Answer P/I with Sample Request (D) from the DimensionOrderRegistry, else No Request (N).", PropertyEditorType.BOOLEAN));
         props.put("orderQueueKey",           new DataTypePropertyDescriptor(orderQueueKey,                 "Order Queue Key",               "Registry queue key - pushing channels must push with the same key.", PropertyEditorType.STRING));
-        props.put("includeChecksumInPayload",new DataTypePropertyDescriptor(includeChecksumInPayload,      "Checksum in Payload",           "Keep the 2-character checksum at the end of the dispatched message.", PropertyEditorType.BOOLEAN));
+        props.put("includeChecksumInPayload",new DataTypePropertyDescriptor(includeChecksumInPayload,      "Checksum in Payload",           "Keep the 2-character checksum at the end of the dispatched message (RAW_FRAME output only).", PropertyEditorType.BOOLEAN));
+        props.put("messageOutputFormat",     new DataTypePropertyDescriptor(messageOutputFormat,           "Message Output Format",         "RAW_FRAME = raw frame payload (Raw inbound data type); HL7_V2 = plugin converts every frame to standard HL7 v2.x (HL7 V2.x inbound data type).", PropertyEditorType.STRING));
         props.put("serverMode",              new DataTypePropertyDescriptor(serverMode,                    "Server Mode",                   "true = receiver (listener/source), false = sender.", PropertyEditorType.BOOLEAN));
 
         return props;
@@ -161,6 +181,9 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
         Object orderKey = has(properties, "orderQueueKey") ? value(properties, "orderQueueKey") : null;
         if (orderKey != null)                            this.orderQueueKey            = String.valueOf(orderKey);
         if (has(properties, "includeChecksumInPayload")) this.includeChecksumInPayload = toBoolean(value(properties, "includeChecksumInPayload"), includeChecksumInPayload);
+        Object outFmt = has(properties, "messageOutputFormat") ? value(properties, "messageOutputFormat") : null;
+        if (outFmt != null && !String.valueOf(outFmt).trim().isEmpty())
+                                                         this.messageOutputFormat     = String.valueOf(outFmt).trim().toUpperCase();
         if (has(properties, "serverMode"))               this.serverMode               = toBoolean(value(properties, "serverMode"), serverMode);
     }
 
@@ -225,6 +248,7 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
     public boolean isOrderLookupEnabled() { return orderLookupEnabled; }
     public String getOrderQueueKey() { return orderQueueKey; }
     public boolean isIncludeChecksumInPayload() { return includeChecksumInPayload; }
+    public String getMessageOutputFormat() { return messageOutputFormat; }
     public boolean isServerMode() { return serverMode; }
 
     // ------------------------------------------------------------------
@@ -248,6 +272,11 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
     public void setOrderLookupEnabled(boolean orderLookupEnabled) { this.orderLookupEnabled = orderLookupEnabled; }
     public void setOrderQueueKey(String orderQueueKey) { this.orderQueueKey = orderQueueKey; }
     public void setIncludeChecksumInPayload(boolean includeChecksumInPayload) { this.includeChecksumInPayload = includeChecksumInPayload; }
+    public void setMessageOutputFormat(String messageOutputFormat) {
+        this.messageOutputFormat = (messageOutputFormat == null || messageOutputFormat.trim().isEmpty())
+                ? com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format.RAW_FRAME
+                : messageOutputFormat.trim().toUpperCase();
+    }
     public void setServerMode(boolean serverMode) { this.serverMode = serverMode; }
 
     @Override
@@ -264,6 +293,7 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
         purged.put("orderLookupEnabled", orderLookupEnabled);
         purged.put("orderQueueKey", orderQueueKey);
         purged.put("includeChecksumInPayload", includeChecksumInPayload);
+        purged.put("messageOutputFormat", messageOutputFormat);
         purged.put("serverMode", serverMode);
         return purged;
     }

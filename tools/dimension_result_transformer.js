@@ -335,7 +335,12 @@ if (msgType === 'I') {
 if (msgType === 'M') {
     // Request Acceptance (instrument -> computer, Table 1-16) after our D
     // download. The data-link ACK was already sent by the mode; the manual
-    // defines NO computer response to this message - decode and log only.
+    // defines NO computer response to this message - decode, log, and update
+    // the download bookkeeping in the DimensionOrderRegistry (v2.1.0):
+    //   M-A -> confirmLastDownload  : the order is STORED on the instrument
+    //   M-R -> rejectLastDownload   : the order is NOT stored - it is kept
+    //         in the registry's rejected list (never silently lost) and the
+    //         LIS must correct + re-push it (requeueOrder/pushOrder).
     // Note: the manual's own accept example carries an extra empty field
     // (M<FS><FS>A<FS>A<FS>1<FS>42), so the status is located by VALUE
     // (A/R) instead of by position.
@@ -353,10 +358,19 @@ if (msgType === 'M') {
     channelMap.put('acceptanceStatus', mStatus);
     channelMap.put('acceptanceReason', mReason);
     channelMap.put('acceptanceRaw', raw);
-    if (mStatus === 'R') {
-        logger.warn('Instrument REJECTED the sample request: reason ' + mReason +
+
+    var Reg = Packages.com.bitdreamit.connect.plugins.transmission.dimension.server.DimensionOrderRegistry;
+    var queueKey = String(globalMap.get('dimensionOrderQueueKey') || 'default');
+    if (mStatus === 'A') {
+        var confirmed = Reg.confirmLastDownload(queueKey);
+        channelMap.put('downloadConfirmed', confirmed != null ? confirmed.getSampleId() : '');
+    } else if (mStatus === 'R') {
+        var rejected = Reg.rejectLastDownload(queueKey, mReason);
+        channelMap.put('downloadRejected', rejected != null ? rejected.getSampleId() : '');
+        logger.error('Instrument REJECTED the sample request: reason ' + mReason +
                 ' (' + (REQUEST_REJECT_REASONS[mReason] || 'unknown') + ')' +
-                ' - the order was NOT stored, re-queue or correct the request');
+                ' - the order was NOT stored, correct it in the LIS and push again' +
+                ' (DimensionOrderRegistry.pushOrder / requeueOrder)');
     }
     channelMap.put('controlMessage', raw);
     return;

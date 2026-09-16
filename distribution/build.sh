@@ -219,6 +219,12 @@ run_tests() {
     java -cp "$OUT_DIR/shared:$OUT_DIR/server:$OUT_DIR/test:$TEST_CP" \
         org.junit.runner.JUnitCore \
         com.bitdreamit.connect.plugins.transmission.dimension.test.DimensionFrameTest
+    java -cp "$OUT_DIR/shared:$OUT_DIR/server:$OUT_DIR/test:$TEST_CP" \
+        org.junit.runner.JUnitCore \
+        com.bitdreamit.connect.plugins.transmission.dimension.test.DimensionSerialPipeTest
+    java -cp "$OUT_DIR/shared:$OUT_DIR/server:$OUT_DIR/test:$TEST_CP" \
+        org.junit.runner.JUnitCore \
+        com.bitdreamit.connect.plugins.transmission.dimension.test.DimensionHL7TranslatorTest
 }
 
 # --- Dispatch ---------------------------------------------------------------

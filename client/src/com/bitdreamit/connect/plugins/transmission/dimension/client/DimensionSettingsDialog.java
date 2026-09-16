@@ -14,6 +14,7 @@ import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -58,6 +59,7 @@ public class DimensionSettingsDialog extends JDialog {
 
     // --- dispatch / mode ---
     private JCheckBox includeChecksumCheck;
+    private JComboBox<String> outputFormatCombo;
     private JCheckBox serverModeCheck;
 
     public DimensionSettingsDialog(Frame owner, DimensionTransmissionModeProperties props) {
@@ -137,8 +139,27 @@ public class DimensionSettingsDialog extends JDialog {
         panel.setBorder(BorderFactory.createTitledBorder("Dispatch / Mode"));
 
         includeChecksumCheck = addBooleanRow(panel, 0, "Checksum in Payload",
-                "Keep the 2-character checksum at the end of the dispatched message");
-        serverModeCheck = addBooleanRow(panel, 1, "Server Mode",
+                "Keep the 2-character checksum at the end of the dispatched message (RAW_FRAME output only)");
+
+        GridBagConstraints fGbc = new GridBagConstraints();
+        fGbc.insets = new Insets(2, 5, 2, 5);
+        fGbc.anchor = GridBagConstraints.WEST;
+        JLabel fmtLabel = new JLabel("Message Output Format:");
+        fGbc.gridx = 0;
+        fGbc.gridy = 1;
+        panel.add(fmtLabel, fGbc);
+        outputFormatCombo = new JComboBox<String>(new String[] {
+                com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format.RAW_FRAME,
+                com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format.HL7_V2 });
+        outputFormatCombo.setToolTipText(
+                "RAW_FRAME = raw frame payload (transformer parses; Raw inbound data type). "
+                + "HL7_V2 = plugin converts every frame to standard HL7 v2.x (HL7 V2.x inbound data type; "
+                + "transformer reads msg['OBX']... like an ASTM/HL7 channel).");
+        fGbc.gridx = 1;
+        fGbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(outputFormatCombo, fGbc);
+
+        serverModeCheck = addBooleanRow(panel, 2, "Server Mode",
                 "true = receiver (listener/source), false = sender");
         return panel;
     }
@@ -253,6 +274,7 @@ public class DimensionSettingsDialog extends JDialog {
         autoEnqAckCheck.setSelected(props.isAutoEnqAck());
 
         includeChecksumCheck.setSelected(props.isIncludeChecksumInPayload());
+        outputFormatCombo.setSelectedItem(props.getMessageOutputFormat());
         serverModeCheck.setSelected(props.isServerMode());
     }
 
@@ -278,6 +300,9 @@ public class DimensionSettingsDialog extends JDialog {
             props.setAutoEnqAck(autoEnqAckCheck.isSelected());
 
             props.setIncludeChecksumInPayload(includeChecksumCheck.isSelected());
+            props.setMessageOutputFormat(outputFormatCombo.getSelectedItem() == null
+                    ? com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format.RAW_FRAME
+                    : String.valueOf(outputFormatCombo.getSelectedItem()));
             props.setServerMode(serverModeCheck.isSelected());
             return true;
         } catch (Exception e) {

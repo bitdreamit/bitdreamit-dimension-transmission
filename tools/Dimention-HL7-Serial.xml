@@ -1,0 +1,701 @@
+<channel version="4.5.2">
+  <id>acad14d5-3176-41eb-b15b-6c97e201109d</id>
+  <nextMetaDataId>2</nextMetaDataId>
+  <name>Dimention HL7 TCP</name>
+  <description>Siemens Dimension bidirectional channel (TCP Listener 6661) - bitdreamit-dimension-transmission v2.2.0 HL7 mode: the plugin converts every frame to standard HL7 v2.x (R-&gt;ORU^R01, I-&gt;QRY^A19, C-&gt;ORU QC, M-&gt;ACK) so the transformer reads msg[OBX]... like an ASTM channel. Source Response=None; the plugin answers the analyzer directly.</description>
+  <revision>1</revision>
+  <sourceConnector version="4.5.2">
+    <metaDataId>0</metaDataId>
+    <name>sourceConnector</name>
+    <properties class="com.bitdreamit.mirth.labextensions.serialconnector.SerialReceiverProperties" version="4.5.2">
+      <pluginProperties/>
+      <portConfig class="com.bitdreamit.mirth.labextensions.serialconnector.SerialPortConfig">
+        <portName>COM3</portName>
+        <baudRate>9600</baudRate>
+        <dataBits>8</dataBits>
+        <stopBits>1</stopBits>
+        <parity>0</parity>
+        <flowControl>0</flowControl>
+        <charset>UTF-8</charset>
+        <transmissionMode>Siemens Dimension</transmissionMode>
+        <setDtr>true</setDtr>
+        <setRts>true</setRts>
+        <flushOnOpen>true</flushOnOpen>
+        <flushOnClose>true</flushOnClose>
+        <healthMonitorEnabled>true</healthMonitorEnabled>
+        <healthInterval>5000</healthInterval>
+        <maxReconnects>10</maxReconnects>
+        <reconnectDelay>5000</reconnectDelay>
+        <maxReconnectDelay>60000</maxReconnectDelay>
+      </portConfig>
+      <sourceConnectorProperties version="4.5.2">
+        <responseVariable>None</responseVariable>
+        <respondAfterProcessing>true</respondAfterProcessing>
+        <processBatch>false</processBatch>
+        <firstResponse>false</firstResponse>
+        <processingThreads>1</processingThreads>
+        <resourceIds class="linked-hash-map">
+          <entry>
+            <string>Default Resource</string>
+            <string>[Default Resource]</string>
+          </entry>
+        </resourceIds>
+        <queueBufferSize>1000</queueBufferSize>
+      </sourceConnectorProperties>
+      <transmissionModeProperties class="com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionTransmissionModeProperties">
+        <pluginPointName>Siemens Dimension</pluginPointName>
+        <startOfMessageBytes>02</startOfMessageBytes>
+        <endOfMessageBytes>03</endOfMessageBytes>
+        <startOfFrameByte>2</startOfFrameByte>
+        <endOfFrameByte>3</endOfFrameByte>
+        <fieldSeparatorByte>28</fieldSeparatorByte>
+        <enquiryByte>5</enquiryByte>
+        <useChecksum>true</useChecksum>
+        <checksumByteLength>2</checksumByteLength>
+        <positiveAckByte>6</positiveAckByte>
+        <negativeAckByte>21</negativeAckByte>
+        <maxRetransmissions>4</maxRetransmissions>
+        <ackTimeoutMs>1000</ackTimeoutMs>
+        <frameTimeoutMs>5000</frameTimeoutMs>
+        <autoResultAcceptance>true</autoResultAcceptance>
+        <resultAcceptanceStatus>A</resultAcceptanceStatus>
+        <autoPollResponse>true</autoPollResponse>
+        <autoEnqAck>true</autoEnqAck>
+        <orderLookupEnabled>true</orderLookupEnabled>
+        <orderQueueKey>default</orderQueueKey>
+        <includeChecksumInPayload>true</includeChecksumInPayload>
+        <messageOutputFormat>HL7_V2</messageOutputFormat>
+        <serverMode>true</serverMode>
+      </transmissionModeProperties>
+      <serverMode>true</serverMode>
+      <remoteAddress></remoteAddress>
+      <remotePort></remotePort>
+      <overrideLocalBinding>false</overrideLocalBinding>
+      <reconnectInterval>5000</reconnectInterval>
+      <receiveTimeout>0</receiveTimeout>
+      <bufferSize>65536</bufferSize>
+      <maxConnections>10</maxConnections>
+      <keepConnectionOpen>true</keepConnectionOpen>
+      <dataTypeBinary>false</dataTypeBinary>
+      <charsetEncoding>DEFAULT_ENCODING</charsetEncoding>
+      <respondOnNewConnection>0</respondOnNewConnection>
+      <responseAddress></responseAddress>
+      <responsePort></responsePort>
+    </properties>
+    <transformer version="4.5.2">
+      <elements>
+        <com.mirth.connect.plugins.javascriptstep.JavaScriptStep version="4.5.2">
+          <name>dimension_hl7_transformer</name>
+          <sequenceNumber>0</sequenceNumber>
+          <enabled>true</enabled>
+          <script>/**
+ * Siemens Dimension (EXL / RxL / Xpand)  -  Mirth Source Transformer
+ * HL7 mode (bitdreamit-dimension-transmission v2.2.0+, Message Output Format = HL7_V2)
+ * ---------------------------------------------------------------------------
+ * Pattern identical to the Bio-Rad D-10 / Erba ASTM transformers:
+ * the JAVA plugin converts every raw Dimension frame into a standard HL7
+ * v2.x message BEFORE dispatch (same idea as the ASTM E1394 datatype), so
+ * this transformer just reads msg[...] with normal HL7 navigation - no frame
+ * splitting, no checksum math, no FS characters, no protocol knowledge.
+ *
+ * CHANNEL REQUIREMENTS (v2.2.0 HL7 mode)
+ *   Channel Source Inbound Data Type = HL7 V2.x   (the plugin emits real HL7)
+ *   Source Response                  = None       (the plugin answers the analyzer
+ *                                                  directly on the line: ACK/NAK,
+ *                                                  N, D order download, M-A)
+ *   Transmission mode                = Siemens Dimension
+ *
+ * WHAT ARRIVES HERE (every frame type, converted by the plugin):
+ *   R  Result              -&gt; ORU^R01  MSH + PID + OBR + OBX (one per test) + NTE
+ *   C  Calibration Result  -&gt; ORU^R01  OBR-4.2 = 'CALIBRATION'  (QC routing)
+ *   I  Query (barcode scan)-&gt; QRY^A19  barcode in PID-3.1 AND QRD-8
+ *   M  Request Acceptance  -&gt; ACK^D01  MSA|AA stored / MSA|AE rejected (+ ERR)
+ *   P  Poll                -&gt; ACK^P01  MSA|CA|&lt;instrumentId&gt;    (control, ignore)
+ *   N  No Request          -&gt; ACK^N01  MSA|CA|                  (control, ignore)
+ *
+ * HL7 FIELD MAP (PN D00396 -&gt; HL7, all verified against live captures):
+ *   barcode/sample#  = OBR-4.1  ('152^DIMENSIONSAMPLE')   [R frames]
+ *   barcode (query)  = PID-3.1  ('26091827')              [I frames]
+ *   patient id       = PID-3.1  (when the analyzer sends one)
+ *   sample type      = NTE|SAMPLE_TYPE segment (Serum, Plasma, ...)
+ *   priority         = NTE|PRIORITY segment    (Routine, STAT, ...)
+ *   analysis ts      = OBR-22 (YYYYMMDDHHMMSS, converted from ssmmhhddmmyy)
+ *   results          = OBX repetition: OBX-3.1 test, OBX-5 value, OBX-6 unit,
+ *                      OBX-11 'F', OBX-14 analysis date
+ *   errors           = NTE|'Error n: text' after the OBX (Appendix III/IV)
+ */
+
+try {
+
+    // -------------------------------------------------------------------
+    // 0. Route on the converted message type (MSH-9.1 / MSH-9.2)
+    // -------------------------------------------------------------------
+    var mshType = msg['MSH']['MSH.9']['MSH.9.1'].toString();   // ORU | QRY | ACK
+    var mshSub  = msg['MSH']['MSH.9']['MSH.9.2'].toString();   // R01 | A19 | D01/P01/N01
+
+    channelMap.put('mirth_source', 'DimensionEXL');
+    channelMap.put('mirth_type', mshType + '^' + mshSub);
+    channelMap.put('messageControlId', msg['MSH']['MSH.10']['MSH.10.1'].toString());
+
+    var data = [];
+
+    // ===================================================================
+    // A. Control frames (poll P / no-request N) - ignore quietly.
+    //    The analyzer polls every 15 s; these messages carry no business
+    //    data (the plugin already answered them on the line).
+    // ===================================================================
+    if (mshType === 'ACK' &amp;&amp; (mshSub === 'P01' || mshSub === 'N01')) {
+        channelMap.put('controlFrame', mshSub);
+        return;
+
+    // ===================================================================
+    // B. Request Acceptance (M frame, answer to our order download)
+    //    MSA|AA|&lt;sampleId&gt;        -&gt; the instrument STORED the order
+    //    MSA|AE|&lt;sampleId&gt;|&lt;code&gt; -&gt; the instrument REFUSED it (ERR text)
+    // ===================================================================
+    } else if (mshType === 'ACK' &amp;&amp; mshSub === 'D01') {
+        var Reg = Packages.com.bitdreamit.connect.plugins.transmission.dimension.server
+                      .DimensionOrderRegistry;
+        var queueKey = String(globalMap.get('dimensionOrderQueueKey') || 'default');
+        var ackCode  = msg['MSA']['MSA.1']['MSA.1.1'].toString();   // AA | AE
+        var sampleId = msg['MSA']['MSA.2']['MSA.2.1'].toString();
+
+        if (ackCode === 'AA') {
+            var confirmed = Reg.confirmLastDownload(queueKey);
+            channelMap.put('downloadAccepted', sampleId || (confirmed != null ? confirmed.getSampleId() : ''));
+            logger.info('Dimension order ACCEPTED by instrument: ' + sampleId);
+        } else if (ackCode === 'AE') {
+            var reason = msg['MSA']['MSA.3']['MSA.3.1'].toString();
+            var errText = msg['ERR']['ERR.3']['ERR.3.1'].toString();
+            var rejected = Reg.rejectLastDownload(queueKey, reason);
+            channelMap.put('downloadRejected', rejected != null ? rejected.getSampleId() : sampleId);
+            channelMap.put('downloadRejectReason', reason);
+            logger.error('Dimension order REJECTED by instrument: reason ' + reason
+                    + ' (' + errText + ') - correct it in the LIS and push again '
+                    + '(DimensionOrderRegistry.pushOrder / requeueOrder)');
+        }
+        return;
+
+    // ===================================================================
+    // C. Barcode Query (I frame, Send ID/Receive mode) -&gt; DB lookup.
+    //    The analyzer scanned barcode &lt;PID-3.1&gt; and asked for the order.
+    //    ANSWERING: the plugin answers the QUERY ITSELF inside the read
+    //    path from the DimensionOrderRegistry (Sample Request D, or N when
+    //    unknown) - the 1-second instrument timer can never be missed.
+    //    THIS transformer loads the order from the LIS DB into the
+    //    registry so the CURRENT query (if the analyzer re-polls) and all
+    //    future queries find it. For zero-retry answers use the order
+    //    feeder channel (pre-push) - see FULL-BIDIRECTIONAL-DOCUMENTATION.md.
+    // ===================================================================
+    } else if (mshType === 'QRY') {
+        var barcode = msg['PID']['PID.3']['PID.3.1'].toString() || null;
+        channelMap.put('queriedBarcode', barcode);
+
+        if (barcode) {
+            var RegQ = Packages.com.bitdreamit.connect.plugins.transmission.dimension.server
+                           .DimensionOrderRegistry;
+            var queueKeyQ = String(globalMap.get('dimensionOrderQueueKey') || 'default');
+
+            // -----------------------------------------------------------
+            // LIVE DB QUERY - replace the connection details with yours.
+            // Example LIS schema:
+            //   orders(barcode, patient_name, sample_type, priority, tests, status)
+            //   tests CSV example: 'BUN,CREA,GLU'   (max 36 x 5 chars)
+            // -----------------------------------------------------------
+            var dbConn = null;
+            try {
+                dbConn = DatabaseConnectionFactory.createDatabaseConnection(
+                        'com.mysql.cj.jdbc.Driver',                    // driver
+                        'jdbc:mysql://127.0.0.1:3306/lis',             // url
+                        'lis', 'secret');                              // user/pass
+                var rs = dbConn.executeCachedQuery(
+                        "SELECT patient_name, sample_type, priority, tests FROM orders " +
+                        "WHERE barcode = '" + barcode.replace(/'/g, "''") + "' AND status = 'NEW' LIMIT 1");
+                if (rs.next()) {
+                    var patient  = String(rs.getString('patient_name') || '');
+                    var type     = String(rs.getString('sample_type') || '1');  // 1=Serum
+                    var priority = String(rs.getString('priority') || '0');     // 0=Routine
+                    var tests    = String(rs.getString('tests') || '');
+                    if (tests) {
+                        RegQ.pushOrder(queueKeyQ, barcode, patient, type, priority, tests);
+                        channelMap.put('orderPushed', tests);
+                        logger.info('DB order pushed for query ' + barcode + ': ' + tests);
+                    }
+                } else {
+                    channelMap.put('orderPushed', '');
+                    logger.warn('No LIS order for scanned barcode ' + barcode
+                            + ' - instrument receives No Request (N)');
+                }
+            } finally {
+                if (dbConn != null) { dbConn.close(); }
+            }
+        }
+        return;
+
+    // ===================================================================
+    // D. ORU^R01
+    // ===================================================================
+    } else if (mshType === 'ORU') {
+        var obr4 = msg['OBR']['OBR.4']['OBR.4.1'].toString() || '';
+        var obr42 = msg['OBR']['OBR.4']['OBR.4.2'].toString() || '';
+
+        // -----------------------------------------------------------
+        // D1. Calibration/QC result (C frame) - OBR-4.2 = CALIBRATION
+        // -----------------------------------------------------------
+        if (obr42 === 'CALIBRATION') {
+            channelMap.put('calibrationTest', obr4);
+            channelMap.put('calibrationLot', msg['OBX'][0]['OBX.5']['OBX.5.1'].toString());
+            channelMap.put('analysisDateTime', msg['OBR']['OBR.22']['OBR.22.1'].toString());
+            logger.info('Calibration/QC result received for ' + obr4
+                    + ' - route to your QC table here');
+            return;
+        }
+
+        // -----------------------------------------------------------
+        // D2. Patient result (R frame) - the D-10 style mapping
+        // -----------------------------------------------------------
+        var barcodeR = obr4;                                          // '152'
+        var patientId = msg['PID']['PID.3']['PID.3.1'].toString() || null;
+        var analysisTs = msg['OBR']['OBR.22']['OBR.22.1'].toString() || '';
+        var analysisDate = analysisTs.substring(0, 8) || null;
+
+        // Sample type / priority are carried as traceability NTE segments
+        var sampleType = null;
+        var priority = null;
+        for each (var nte in msg['NTE']) {
+            var nteType = nte['NTE.3']['NTE.3.1'].toString();
+            if (nteType === 'SAMPLE_TYPE') { sampleType = nte['NTE.4']['NTE.4.1'].toString(); }
+            if (nteType === 'PRIORITY')    { priority    = nte['NTE.4']['NTE.4.1'].toString(); }
+        }
+
+        // idMapping / testMapping - map analyzer test names to YOUR ids
+        // (same structure as the D-10 and Erba transformers)
+        const idMapping = {
+            'ALTI': 101, 'CRE2': 102, 'GLUC': 103, 'BUN': 104, 'GLU': 105
+            // ... add every test your laboratory runs ...
+        };
+        const testMapping = {
+            'ALTI': 100, 'CRE2': 100, 'GLUC': 100, 'BUN': 100, 'GLU': 100
+            // ... parent panel ids ...
+        };
+
+        // Value formatter (same shape as the D-10 transformer)
+        function formatValue(value) {
+            if (!isNaN(value)) {
+                var numValue = parseFloat(value);
+                return Number.isInteger(numValue) ? numValue : numValue.toFixed(2);
+            }
+            return value;
+        }
+
+        // Iterate the OBX repetitions - one row per test
+        for each (var obx in msg['OBX']) {
+            var name  = obx['OBX.3']['OBX.3.1'].toString() || null;   // ALTI / CRE2
+            var value = obx['OBX.5']['OBX.5.1'].toString() || null;   // 72 / 0.59
+            var unit  = obx['OBX.6']['OBX.6.1'].toString() || '';     // U/L / mg/dL
+            var status = obx['OBX.11']['OBX.11.1'].toString() || 'F';
+            if (!name) { continue; }
+
+            data.push({
+                id:      idMapping[name] || null,
+                test_id: testMapping[name] || null,
+                name:    name,
+                value:   value != null ? formatValue(value) : null,
+                unit:    unit,
+                status:  status,
+                date:    analysisDate
+            });
+        }
+
+        channelMap.put('barcode', barcodeR);
+        channelMap.put('patientId', patientId);
+        channelMap.put('sampleType', sampleType);
+        channelMap.put('priority', priority);
+        channelMap.put('analysisDateTime', analysisTs);
+        channelMap.put('testCount', data.length);
+        channelMap.put('data', JSON.stringify(data));
+
+        // -----------------------------------------------------------
+        // WRITE TO YOUR LIS DATABASE (destination side example)
+        // -----------------------------------------------------------
+        // Put a JavaScript Writer destination on the channel with:
+        //   var rows = JSON.parse(channelMap.get('data'));
+        //   var barcode = channelMap.get('barcode');
+        //   for (var i = 0; i &lt; rows.length; i++) {
+        //       var r = rows[i];
+        //       // INSERT INTO results(barcode, test_id, name, value, unit, date)
+        //       // VALUES ('...', ..., ..., ..., ..., '...');
+        //   }
+        // Or map rows[i].value directly in a Database Writer template.
+        // -----------------------------------------------------------
+
+    } else {
+        // Unknown converted type - log and keep the message for inspection
+        logger.warn('Unexpected Dimension message type: ' + mshType + '^' + mshSub);
+    }
+
+} catch (error) {
+    // A conversion problem must never silently drop a result: log loudly
+    // and rethrow so the message shows ERROR in the Mirth dashboard.
+    logger.error('Error parsing Dimension HL7 message: ' + error.message);
+    throw error;
+}
+</script>
+        </com.mirth.connect.plugins.javascriptstep.JavaScriptStep>
+      </elements>
+      <inboundTemplate encoding="base64"></inboundTemplate>
+      <outboundTemplate encoding="base64"></outboundTemplate>
+      <inboundDataType>HL7V2</inboundDataType>
+      <outboundDataType>HL7V2</outboundDataType>
+      <inboundProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DataTypeProperties" version="4.5.2">
+        <serializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2SerializationProperties" version="4.5.2">
+          <handleRepetitions>true</handleRepetitions>
+          <handleSubcomponents>true</handleSubcomponents>
+          <useStrictParser>false</useStrictParser>
+          <useStrictValidation>false</useStrictValidation>
+          <stripNamespaces>false</stripNamespaces>
+          <segmentDelimiter>\r</segmentDelimiter>
+          <convertLineBreaks>true</convertLineBreaks>
+        </serializationProperties>
+        <deserializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DeserializationProperties" version="4.5.2">
+          <useStrictParser>false</useStrictParser>
+          <useStrictValidation>false</useStrictValidation>
+          <segmentDelimiter>\r</segmentDelimiter>
+        </deserializationProperties>
+        <batchProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2BatchProperties" version="4.5.2">
+          <splitType>MSH_Segment</splitType>
+          <batchScript></batchScript>
+        </batchProperties>
+        <responseGenerationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseGenerationProperties" version="4.5.2">
+          <segmentDelimiter>\r</segmentDelimiter>
+          <successfulACKCode>AA</successfulACKCode>
+          <successfulACKMessage></successfulACKMessage>
+          <errorACKCode>AE</errorACKCode>
+          <errorACKMessage>An Error Occurred Processing Message.</errorACKMessage>
+          <rejectedACKCode>AR</rejectedACKCode>
+          <rejectedACKMessage>Message Rejected.</rejectedACKMessage>
+          <msh15ACKAccept>false</msh15ACKAccept>
+          <dateFormat>yyyyMMddHHmmss.SSS</dateFormat>
+        </responseGenerationProperties>
+        <responseValidationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseValidationProperties" version="4.5.2">
+          <successfulACKCode>AA,CA</successfulACKCode>
+          <errorACKCode>AE,CE</errorACKCode>
+          <rejectedACKCode>AR,CR</rejectedACKCode>
+          <validateMessageControlId>true</validateMessageControlId>
+          <originalMessageControlId>Destination_Encoded</originalMessageControlId>
+          <originalIdMapVariable></originalIdMapVariable>
+        </responseValidationProperties>
+      </inboundProperties>
+      <outboundProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DataTypeProperties" version="4.5.2">
+        <serializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2SerializationProperties" version="4.5.2">
+          <handleRepetitions>true</handleRepetitions>
+          <handleSubcomponents>true</handleSubcomponents>
+          <useStrictParser>false</useStrictParser>
+          <useStrictValidation>false</useStrictValidation>
+          <stripNamespaces>false</stripNamespaces>
+          <segmentDelimiter>\r</segmentDelimiter>
+          <convertLineBreaks>true</convertLineBreaks>
+        </serializationProperties>
+        <deserializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DeserializationProperties" version="4.5.2">
+          <useStrictParser>false</useStrictParser>
+          <useStrictValidation>false</useStrictValidation>
+          <segmentDelimiter>\r</segmentDelimiter>
+        </deserializationProperties>
+        <batchProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2BatchProperties" version="4.5.2">
+          <splitType>MSH_Segment</splitType>
+          <batchScript></batchScript>
+        </batchProperties>
+        <responseGenerationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseGenerationProperties" version="4.5.2">
+          <segmentDelimiter>\r</segmentDelimiter>
+          <successfulACKCode>AA</successfulACKCode>
+          <successfulACKMessage></successfulACKMessage>
+          <errorACKCode>AE</errorACKCode>
+          <errorACKMessage>An Error Occurred Processing Message.</errorACKMessage>
+          <rejectedACKCode>AR</rejectedACKCode>
+          <rejectedACKMessage>Message Rejected.</rejectedACKMessage>
+          <msh15ACKAccept>false</msh15ACKAccept>
+          <dateFormat>yyyyMMddHHmmss.SSS</dateFormat>
+        </responseGenerationProperties>
+        <responseValidationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseValidationProperties" version="4.5.2">
+          <successfulACKCode>AA,CA</successfulACKCode>
+          <errorACKCode>AE,CE</errorACKCode>
+          <rejectedACKCode>AR,CR</rejectedACKCode>
+          <validateMessageControlId>true</validateMessageControlId>
+          <originalMessageControlId>Destination_Encoded</originalMessageControlId>
+          <originalIdMapVariable></originalIdMapVariable>
+        </responseValidationProperties>
+      </outboundProperties>
+    </transformer>
+    <filter version="4.5.2">
+      <elements/>
+    </filter>
+    <transportName>Serial Reader</transportName>
+    <mode>SOURCE</mode>
+    <enabled>true</enabled>
+    <waitForPrevious>true</waitForPrevious>
+  </sourceConnector>
+  <destinationConnectors>
+    <connector version="4.5.2">
+      <metaDataId>1</metaDataId>
+      <name>Destination 1</name>
+      <properties class="com.mirth.connect.connectors.vm.VmDispatcherProperties" version="4.5.2">
+        <pluginProperties/>
+        <destinationConnectorProperties version="4.5.2">
+          <queueEnabled>false</queueEnabled>
+          <sendFirst>false</sendFirst>
+          <retryIntervalMillis>10000</retryIntervalMillis>
+          <regenerateTemplate>false</regenerateTemplate>
+          <retryCount>0</retryCount>
+          <rotate>false</rotate>
+          <includeFilterTransformer>false</includeFilterTransformer>
+          <threadCount>1</threadCount>
+          <threadAssignmentVariable></threadAssignmentVariable>
+          <validateResponse>false</validateResponse>
+          <resourceIds class="linked-hash-map">
+            <entry>
+              <string>Default Resource</string>
+              <string>[Default Resource]</string>
+            </entry>
+          </resourceIds>
+          <queueBufferSize>1000</queueBufferSize>
+          <reattachAttachments>true</reattachAttachments>
+        </destinationConnectorProperties>
+        <channelId>none</channelId>
+        <channelTemplate>${message.encodedData}</channelTemplate>
+        <mapVariables/>
+      </properties>
+      <transformer version="4.5.2">
+        <elements/>
+        <inboundDataType>HL7V2</inboundDataType>
+        <outboundDataType>HL7V2</outboundDataType>
+        <inboundProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DataTypeProperties" version="4.5.2">
+          <serializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2SerializationProperties" version="4.5.2">
+            <handleRepetitions>true</handleRepetitions>
+            <handleSubcomponents>true</handleSubcomponents>
+            <useStrictParser>false</useStrictParser>
+            <useStrictValidation>false</useStrictValidation>
+            <stripNamespaces>false</stripNamespaces>
+            <segmentDelimiter>\r</segmentDelimiter>
+            <convertLineBreaks>true</convertLineBreaks>
+          </serializationProperties>
+          <deserializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DeserializationProperties" version="4.5.2">
+            <useStrictParser>false</useStrictParser>
+            <useStrictValidation>false</useStrictValidation>
+            <segmentDelimiter>\r</segmentDelimiter>
+          </deserializationProperties>
+          <batchProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2BatchProperties" version="4.5.2">
+            <splitType>MSH_Segment</splitType>
+            <batchScript></batchScript>
+          </batchProperties>
+          <responseGenerationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseGenerationProperties" version="4.5.2">
+            <segmentDelimiter>\r</segmentDelimiter>
+            <successfulACKCode>AA</successfulACKCode>
+            <successfulACKMessage></successfulACKMessage>
+            <errorACKCode>AE</errorACKCode>
+            <errorACKMessage>An Error Occurred Processing Message.</errorACKMessage>
+            <rejectedACKCode>AR</rejectedACKCode>
+            <rejectedACKMessage>Message Rejected.</rejectedACKMessage>
+            <msh15ACKAccept>false</msh15ACKAccept>
+            <dateFormat>yyyyMMddHHmmss.SSS</dateFormat>
+          </responseGenerationProperties>
+          <responseValidationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseValidationProperties" version="4.5.2">
+            <successfulACKCode>AA,CA</successfulACKCode>
+            <errorACKCode>AE,CE</errorACKCode>
+            <rejectedACKCode>AR,CR</rejectedACKCode>
+            <validateMessageControlId>true</validateMessageControlId>
+            <originalMessageControlId>Destination_Encoded</originalMessageControlId>
+            <originalIdMapVariable></originalIdMapVariable>
+          </responseValidationProperties>
+        </inboundProperties>
+        <outboundProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DataTypeProperties" version="4.5.2">
+          <serializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2SerializationProperties" version="4.5.2">
+            <handleRepetitions>true</handleRepetitions>
+            <handleSubcomponents>true</handleSubcomponents>
+            <useStrictParser>false</useStrictParser>
+            <useStrictValidation>false</useStrictValidation>
+            <stripNamespaces>false</stripNamespaces>
+            <segmentDelimiter>\r</segmentDelimiter>
+            <convertLineBreaks>true</convertLineBreaks>
+          </serializationProperties>
+          <deserializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DeserializationProperties" version="4.5.2">
+            <useStrictParser>false</useStrictParser>
+            <useStrictValidation>false</useStrictValidation>
+            <segmentDelimiter>\r</segmentDelimiter>
+          </deserializationProperties>
+          <batchProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2BatchProperties" version="4.5.2">
+            <splitType>MSH_Segment</splitType>
+            <batchScript></batchScript>
+          </batchProperties>
+          <responseGenerationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseGenerationProperties" version="4.5.2">
+            <segmentDelimiter>\r</segmentDelimiter>
+            <successfulACKCode>AA</successfulACKCode>
+            <successfulACKMessage></successfulACKMessage>
+            <errorACKCode>AE</errorACKCode>
+            <errorACKMessage>An Error Occurred Processing Message.</errorACKMessage>
+            <rejectedACKCode>AR</rejectedACKCode>
+            <rejectedACKMessage>Message Rejected.</rejectedACKMessage>
+            <msh15ACKAccept>false</msh15ACKAccept>
+            <dateFormat>yyyyMMddHHmmss.SSS</dateFormat>
+          </responseGenerationProperties>
+          <responseValidationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseValidationProperties" version="4.5.2">
+            <successfulACKCode>AA,CA</successfulACKCode>
+            <errorACKCode>AE,CE</errorACKCode>
+            <rejectedACKCode>AR,CR</rejectedACKCode>
+            <validateMessageControlId>true</validateMessageControlId>
+            <originalMessageControlId>Destination_Encoded</originalMessageControlId>
+            <originalIdMapVariable></originalIdMapVariable>
+          </responseValidationProperties>
+        </outboundProperties>
+      </transformer>
+      <responseTransformer version="4.5.2">
+        <elements/>
+        <inboundDataType>HL7V2</inboundDataType>
+        <outboundDataType>HL7V2</outboundDataType>
+        <inboundProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DataTypeProperties" version="4.5.2">
+          <serializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2SerializationProperties" version="4.5.2">
+            <handleRepetitions>true</handleRepetitions>
+            <handleSubcomponents>true</handleSubcomponents>
+            <useStrictParser>false</useStrictParser>
+            <useStrictValidation>false</useStrictValidation>
+            <stripNamespaces>false</stripNamespaces>
+            <segmentDelimiter>\r</segmentDelimiter>
+            <convertLineBreaks>true</convertLineBreaks>
+          </serializationProperties>
+          <deserializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DeserializationProperties" version="4.5.2">
+            <useStrictParser>false</useStrictParser>
+            <useStrictValidation>false</useStrictValidation>
+            <segmentDelimiter>\r</segmentDelimiter>
+          </deserializationProperties>
+          <batchProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2BatchProperties" version="4.5.2">
+            <splitType>MSH_Segment</splitType>
+            <batchScript></batchScript>
+          </batchProperties>
+          <responseGenerationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseGenerationProperties" version="4.5.2">
+            <segmentDelimiter>\r</segmentDelimiter>
+            <successfulACKCode>AA</successfulACKCode>
+            <successfulACKMessage></successfulACKMessage>
+            <errorACKCode>AE</errorACKCode>
+            <errorACKMessage>An Error Occurred Processing Message.</errorACKMessage>
+            <rejectedACKCode>AR</rejectedACKCode>
+            <rejectedACKMessage>Message Rejected.</rejectedACKMessage>
+            <msh15ACKAccept>false</msh15ACKAccept>
+            <dateFormat>yyyyMMddHHmmss.SSS</dateFormat>
+          </responseGenerationProperties>
+          <responseValidationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseValidationProperties" version="4.5.2">
+            <successfulACKCode>AA,CA</successfulACKCode>
+            <errorACKCode>AE,CE</errorACKCode>
+            <rejectedACKCode>AR,CR</rejectedACKCode>
+            <validateMessageControlId>true</validateMessageControlId>
+            <originalMessageControlId>Destination_Encoded</originalMessageControlId>
+            <originalIdMapVariable></originalIdMapVariable>
+          </responseValidationProperties>
+        </inboundProperties>
+        <outboundProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DataTypeProperties" version="4.5.2">
+          <serializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2SerializationProperties" version="4.5.2">
+            <handleRepetitions>true</handleRepetitions>
+            <handleSubcomponents>true</handleSubcomponents>
+            <useStrictParser>false</useStrictParser>
+            <useStrictValidation>false</useStrictValidation>
+            <stripNamespaces>false</stripNamespaces>
+            <segmentDelimiter>\r</segmentDelimiter>
+            <convertLineBreaks>true</convertLineBreaks>
+          </serializationProperties>
+          <deserializationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2DeserializationProperties" version="4.5.2">
+            <useStrictParser>false</useStrictParser>
+            <useStrictValidation>false</useStrictValidation>
+            <segmentDelimiter>\r</segmentDelimiter>
+          </deserializationProperties>
+          <batchProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2BatchProperties" version="4.5.2">
+            <splitType>MSH_Segment</splitType>
+            <batchScript></batchScript>
+          </batchProperties>
+          <responseGenerationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseGenerationProperties" version="4.5.2">
+            <segmentDelimiter>\r</segmentDelimiter>
+            <successfulACKCode>AA</successfulACKCode>
+            <successfulACKMessage></successfulACKMessage>
+            <errorACKCode>AE</errorACKCode>
+            <errorACKMessage>An Error Occurred Processing Message.</errorACKMessage>
+            <rejectedACKCode>AR</rejectedACKCode>
+            <rejectedACKMessage>Message Rejected.</rejectedACKMessage>
+            <msh15ACKAccept>false</msh15ACKAccept>
+            <dateFormat>yyyyMMddHHmmss.SSS</dateFormat>
+          </responseGenerationProperties>
+          <responseValidationProperties class="com.mirth.connect.plugins.datatypes.hl7v2.HL7v2ResponseValidationProperties" version="4.5.2">
+            <successfulACKCode>AA,CA</successfulACKCode>
+            <errorACKCode>AE,CE</errorACKCode>
+            <rejectedACKCode>AR,CR</rejectedACKCode>
+            <validateMessageControlId>true</validateMessageControlId>
+            <originalMessageControlId>Destination_Encoded</originalMessageControlId>
+            <originalIdMapVariable></originalIdMapVariable>
+          </responseValidationProperties>
+        </outboundProperties>
+      </responseTransformer>
+      <filter version="4.5.2">
+        <elements/>
+      </filter>
+      <transportName>Channel Writer</transportName>
+      <mode>DESTINATION</mode>
+      <enabled>true</enabled>
+      <waitForPrevious>true</waitForPrevious>
+    </connector>
+  </destinationConnectors>
+  <preprocessingScript>// Modify the message variable below to pre process data
+return message;</preprocessingScript>
+  <postprocessingScript>// This script executes once after a message has been processed
+// Responses returned from here will be stored as &quot;Postprocessor&quot; in the response map
+return;</postprocessingScript>
+  <deployScript>// This script executes once when the channel is deployed
+// You only have access to the globalMap and globalChannelMap here to persist data
+return;</deployScript>
+  <undeployScript>// This script executes once when the channel is undeployed
+// You only have access to the globalMap and globalChannelMap here to persist data
+return;</undeployScript>
+  <properties version="4.5.2">
+    <clearGlobalChannelMap>true</clearGlobalChannelMap>
+    <messageStorageMode>DEVELOPMENT</messageStorageMode>
+    <encryptData>false</encryptData>
+    <encryptAttachments>false</encryptAttachments>
+    <encryptCustomMetaData>false</encryptCustomMetaData>
+    <removeContentOnCompletion>false</removeContentOnCompletion>
+    <removeOnlyFilteredOnCompletion>false</removeOnlyFilteredOnCompletion>
+    <removeAttachmentsOnCompletion>false</removeAttachmentsOnCompletion>
+    <initialState>STARTED</initialState>
+    <storeAttachments>true</storeAttachments>
+    <metaDataColumns>
+      <metaDataColumn>
+        <name>SOURCE</name>
+        <type>STRING</type>
+        <mappingName>mirth_source</mappingName>
+      </metaDataColumn>
+      <metaDataColumn>
+        <name>TYPE</name>
+        <type>STRING</type>
+        <mappingName>mirth_type</mappingName>
+      </metaDataColumn>
+    </metaDataColumns>
+    <attachmentProperties version="4.5.2">
+      <type>None</type>
+      <properties/>
+    </attachmentProperties>
+    <resourceIds class="linked-hash-map">
+      <entry>
+        <string>Default Resource</string>
+        <string>[Default Resource]</string>
+      </entry>
+    </resourceIds>
+  </properties>
+  <exportData>
+    <metadata>
+      <enabled>true</enabled>
+      <lastModified>
+        <time>1788135728640</time>
+        <timezone>Asia/Dhaka</timezone>
+      </lastModified>
+      <pruningSettings>
+        <archiveEnabled>true</archiveEnabled>
+        <pruneErroredMessages>false</pruneErroredMessages>
+      </pruningSettings>
+      <userId>1</userId>
+    </metadata>
+  </exportData>
+</channel>

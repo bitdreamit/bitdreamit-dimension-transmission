@@ -65,9 +65,11 @@ import com.mirth.connect.donkey.server.message.batch.BatchStreamReader;
  * </ul>
  *
  * <p>The channel transformer is therefore PURELY a business formatter
- * (R -> HL7 ORU) - it never builds protocol frames and never touches
- * responseMap, eliminating the whole class of transformer-side protocol
- * errors (row/map/strict-comparison failures) of previous revisions.</p>
+ * (barcode/test mapping to the LIS) - it never builds protocol frames and
+ * never touches responseMap. With {@code messageOutputFormat = HL7_V2}
+ * (default RAW_FRAME, v2.2.0) the plugin ALSO converts every frame to a
+ * standard HL7 v2.x message (DimensionHL7Translator) before dispatch, so
+ * the transformer reads msg['OBX']... exactly like an ASTM/HL7 channel.</p>
  */
 public class DimensionStreamHandler extends StreamHandler {
 
@@ -175,6 +177,16 @@ public class DimensionStreamHandler extends StreamHandler {
                 nakRetries = 0;
 
                 autoRespond(payload);
+
+                // v2.2.0 - the "ASTM transmission" pattern: convert the frame
+                // to a standard HL7 v2.x message INSIDE the plugin so the
+                // channel uses the normal HL7 V2.x data type and the transformer
+                // reads msg['OBX']... like any ASTM/HL7 channel. The translator
+                // never throws (raw payload fallback), so the read loop cannot
+                // break on a malformed field.
+                if (DimensionHL7Translator.isHl7Output(props)) {
+                    return DimensionHL7Translator.toHL7(payload, props).getBytes("US-ASCII");
+                }
 
                 if (!props.isIncludeChecksumInPayload() && payload.length > 2) {
                     byte[] stripped = new byte[payload.length - 2];
@@ -302,17 +314,33 @@ public class DimensionStreamHandler extends StreamHandler {
                 String firstPoll = fields.length > 2 ? fields[2] : "";
                 String request   = fields.length > 3 ? fields[3] : "";
                 if ("0".equals(firstPoll) && "1".equals(request)) {
+                    // DELETE downloads have priority: the manual allows deleting
+                    // a request only BEFORE processing starts, so a pending
+                    // delete must not wait behind new adds.
+                    DimensionOrderRegistry.DimensionOrder del =
+                            DimensionOrderRegistry.takeNextDelete(key);
+                    if (del != null) {
+                        String dPayload = buildSampleRequestPayload(del, 'D');
+                        logger.info("Dimension DELETE download for poll: " + del);
+                        sendApplicationFrame(dPayload);
+                        return;
+                    }
                     order = DimensionOrderRegistry.takeOrder(key);
                     if (order != null) { sampleId = order.getSampleId(); }
                 }
             }
 
             if (order != null && !order.getTests().isEmpty()) {
-                String dPayload = buildSampleRequestPayload(order);
+                String dPayload = buildSampleRequestPayload(order, 'A');
                 logger.info("Dimension order download for "
                         + (type == DimensionConstants.MSG_QUERY ? "query " : "poll ")
                         + sampleId + " (" + order.getTestCount() + " test(s))");
                 sendApplicationFrame(dPayload);
+                // Bookkeeping: the D frame is on the wire - remember it until
+                // the instrument's Request Acceptance [M] arrives (the M frame
+                // itself is dispatched to the channel transformer, which calls
+                // confirmLastDownload / rejectLastDownload).
+                DimensionOrderRegistry.markDownloaded(key, order);
                 return;
             }
         }
@@ -327,16 +355,21 @@ public class DimensionStreamHandler extends StreamHandler {
      * Builds the Sample Request (D) payload exactly as PN D00396 Table 1-12
      * (p. 1-9) lays it out - NO STX/ETX/checksum (sendApplicationFrame adds
      * those). Layout (FS-separated):
-     * <pre>D | Carrier(0) | Loadlist(0) | Transaction(A) | Patient | SampleID |
+     * <pre>D | Carrier(0) | Loadlist(0) | Transaction | Patient | SampleID |
      *     Type | Location | Priority | #Cups(1) | Cup(**) | Dilution(1) |
      *     #Tests | TestName...</pre>
+     *
+     * @param transaction 'A' = add the request, 'D' = delete an already
+     *        downloaded request (manual: a delete must resend the FULL
+     *        request with D in the Transaction field, so the same layout
+     *        applies)
      */
-    static String buildSampleRequestPayload(DimensionOrderRegistry.DimensionOrder order) {
+    static String buildSampleRequestPayload(DimensionOrderRegistry.DimensionOrder order, char transaction) {
         StringBuilder sb = new StringBuilder();
         sb.append('D')
           .append(FS_CH).append('0')                     // Sample Carrier ID (always 0)
           .append(FS_CH).append('0')                     // Loadlist ID (always 0)
-          .append(FS_CH).append('A')                     // Transaction: A = Add, D = Delete
+          .append(FS_CH).append(transaction)             // A = Add, D = Delete
           .append(FS_CH).append(nullSafe(order.getPatient()))
           .append(FS_CH).append(nullSafe(order.getSampleId()))
           .append(FS_CH).append(nullSafe(order.getType()))
@@ -350,6 +383,11 @@ public class DimensionStreamHandler extends StreamHandler {
             sb.append(FS_CH).append(test);
         }
         return sb.toString();
+    }
+
+    /** Add-transaction convenience overload. */
+    static String buildSampleRequestPayload(DimensionOrderRegistry.DimensionOrder order) {
+        return buildSampleRequestPayload(order, 'A');
     }
 
     /** Returns a copy of the order whose sample ID echoes the scanned/queried one. */
