@@ -406,4 +406,24 @@ public class DimensionHL7TranslatorTest {
         props.setMessageOutputFormat(null);              // null -> default
         assertEquals(DimensionHL7Format.RAW_FRAME, props.getMessageOutputFormat());
     }
+
+    @Test
+    public void testWireDebugPropertyRoundTrip() {
+        DimensionTransmissionModeProperties props = new DimensionTransmissionModeProperties();
+        assertFalse("wire debug is OFF by default", props.isWireDebugEnabled());
+
+        props.setWireDebugEnabled(true);
+        assertTrue(props.isWireDebugEnabled());
+
+        // descriptor map round trip (the path Mirth's serializer uses)
+        java.util.Map<String, com.mirth.connect.model.datatype.DataTypePropertyDescriptor> map =
+                props.getPropertyDescriptors();
+        assertTrue("wireDebugEnabled must be exposed in the property descriptors",
+                map.containsKey("wireDebugEnabled"));
+
+        DimensionTransmissionModeProperties loaded = new DimensionTransmissionModeProperties();
+        assertFalse(loaded.isWireDebugEnabled());
+        loaded.setProperties(map);
+        assertTrue("value must survive the descriptor map round trip", loaded.isWireDebugEnabled());
+    }
 }

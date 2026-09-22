@@ -108,6 +108,18 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
      */
     private String  messageOutputFormat = com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format.RAW_FRAME;
 
+    // --- Diagnostics (wire-level debug) ---
+    /**
+     * When true, EVERY raw frame the analyzer sends/receives (hex + ASCII),
+     * every control byte (ACK/NAK/ENQ), the internal raw-&gt;HL7 conversion
+     * pair and the registry decisions are logged to the Mirth server log
+     * (logger name {@code dimension.wire}, INFO level) - so the actual
+     * wire traffic and the automatic conversion are no longer a black box.
+     * Global override for ALL channels without redeploy:
+     * {@code -Ddimension.wireDebug=true}.
+     */
+    private boolean wireDebugEnabled = false;
+
     // --- Mode ---
     private boolean serverMode = true; // true = listener/receiver, false = sender
 
@@ -151,6 +163,7 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
         props.put("includeChecksumInPayload",new DataTypePropertyDescriptor(includeChecksumInPayload,      "Checksum in Payload",           "Keep the 2-character checksum at the end of the dispatched message (RAW_FRAME output only).", PropertyEditorType.BOOLEAN));
         props.put("messageOutputFormat",     new DataTypePropertyDescriptor(messageOutputFormat,           "Message Output Format",         "RAW_FRAME = raw frame payload (Raw inbound data type); HL7_V2 = plugin converts every frame to standard HL7 v2.x (HL7 V2.x inbound data type).", PropertyEditorType.STRING));
         props.put("serverMode",              new DataTypePropertyDescriptor(serverMode,                    "Server Mode",                   "true = receiver (listener/source), false = sender.", PropertyEditorType.BOOLEAN));
+        props.put("wireDebugEnabled",        new DataTypePropertyDescriptor(wireDebugEnabled,              "Wire Debug (Raw Frames)",       "Log EVERY raw analyzer frame (hex+ASCII) both directions + control bytes + the internal raw-to-HL7 conversion + registry decisions to the Mirth log (logger 'dimension.wire', INFO). Global override: -Ddimension.wireDebug=true.", PropertyEditorType.BOOLEAN));
 
         return props;
     }
@@ -185,6 +198,7 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
         if (outFmt != null && !String.valueOf(outFmt).trim().isEmpty())
                                                          this.messageOutputFormat     = String.valueOf(outFmt).trim().toUpperCase();
         if (has(properties, "serverMode"))               this.serverMode               = toBoolean(value(properties, "serverMode"), serverMode);
+        if (has(properties, "wireDebugEnabled"))         this.wireDebugEnabled         = toBoolean(value(properties, "wireDebugEnabled"), wireDebugEnabled);
     }
 
     private static boolean has(Map<String, DataTypePropertyDescriptor> m, String key) {
@@ -250,6 +264,7 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
     public boolean isIncludeChecksumInPayload() { return includeChecksumInPayload; }
     public String getMessageOutputFormat() { return messageOutputFormat; }
     public boolean isServerMode() { return serverMode; }
+    public boolean isWireDebugEnabled() { return wireDebugEnabled; }
 
     // ------------------------------------------------------------------
     // Setters
@@ -278,6 +293,7 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
                 : messageOutputFormat.trim().toUpperCase();
     }
     public void setServerMode(boolean serverMode) { this.serverMode = serverMode; }
+    public void setWireDebugEnabled(boolean wireDebugEnabled) { this.wireDebugEnabled = wireDebugEnabled; }
 
     @Override
     public Map<String, Object> getPurgedProperties() {
@@ -295,6 +311,7 @@ public class DimensionTransmissionModeProperties extends FrameModeProperties {
         purged.put("includeChecksumInPayload", includeChecksumInPayload);
         purged.put("messageOutputFormat", messageOutputFormat);
         purged.put("serverMode", serverMode);
+        purged.put("wireDebugEnabled", wireDebugEnabled);
         return purged;
     }
 }

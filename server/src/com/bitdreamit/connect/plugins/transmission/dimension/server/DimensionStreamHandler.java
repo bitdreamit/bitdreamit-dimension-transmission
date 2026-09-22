@@ -155,6 +155,11 @@ public class DimensionStreamHandler extends StreamHandler {
                 if (raw.length < 4) {
                     // Shorter than STX + TYPE + CHK(2)
                     logger.warn("Dimension frame too short (" + raw.length + " bytes) - NAK");
+                    if (DimensionWireDebug.enabled(props)) {
+                        DimensionWireDebug.in(withEtx(raw),
+                                "FRAME TOO SHORT (" + raw.length + " bytes) -> NAK (retry "
+                                + (nakRetries + 1) + "/" + props.getMaxRetransmissions() + ")");
+                    }
                     nakFrame();
                     continue;
                 }
@@ -166,8 +171,20 @@ public class DimensionStreamHandler extends StreamHandler {
                     logger.warn("Dimension checksum mismatch on frame type '"
                             + (char) (payload[0] & 0xFF) + "' - NAK (retry "
                             + Math.max(0, nakRetries) + "/" + props.getMaxRetransmissions() + ")");
+                    if (DimensionWireDebug.enabled(props)) {
+                        DimensionWireDebug.in(withEtx(raw),
+                                "CHECKSUM FAIL on type '" + (char) (payload[0] & 0xFF)
+                                + "' -> NAK (retry " + Math.max(0, nakRetries)
+                                + "/" + props.getMaxRetransmissions() + ")");
+                    }
                     nakFrame();
                     continue; // instrument retransmits the same frame
+                }
+
+                if (DimensionWireDebug.enabled(props)) {
+                    DimensionWireDebug.in(withEtx(raw),
+                            "valid frame from analyzer, type '"
+                            + (char) (payload[0] & 0xFF) + "'");
                 }
 
                 // Frame is good: ACK it immediately (1-second instrument timer),
@@ -185,13 +202,28 @@ public class DimensionStreamHandler extends StreamHandler {
                 // never throws (raw payload fallback), so the read loop cannot
                 // break on a malformed field.
                 if (DimensionHL7Translator.isHl7Output(props)) {
-                    return DimensionHL7Translator.toHL7(payload, props).getBytes("US-ASCII");
+                    String hl7 = DimensionHL7Translator.toHL7(payload, props);
+                    if (DimensionWireDebug.enabled(props)) {
+                        DimensionWireDebug.dispatch(payload, hl7,
+                                "internal conversion: raw frame -> HL7 v2.x (messageOutputFormat=HL7_V2)");
+                    }
+                    return hl7.getBytes("US-ASCII");
                 }
 
                 if (!props.isIncludeChecksumInPayload() && payload.length > 2) {
                     byte[] stripped = new byte[payload.length - 2];
                     System.arraycopy(payload, 0, stripped, 0, stripped.length);
+                    if (DimensionWireDebug.enabled(props)) {
+                        DimensionWireDebug.dispatch(payload,
+                                new String(stripped, java.nio.charset.StandardCharsets.US_ASCII),
+                                "dispatched with trailing checksum stripped (RAW_FRAME)");
+                    }
                     return stripped;
+                }
+                if (DimensionWireDebug.enabled(props)) {
+                    DimensionWireDebug.dispatch(payload,
+                            new String(payload, java.nio.charset.StandardCharsets.US_ASCII),
+                            "dispatched as-is (RAW_FRAME, checksum kept)");
                 }
                 return payload;
             }
@@ -206,15 +238,27 @@ public class DimensionStreamHandler extends StreamHandler {
      * ACK/NAK are the instrument acknowledging OUR frames (consume).
      */
     private void handleStrayByte(int b) throws IOException {
+        boolean wire = DimensionWireDebug.enabled(props);
         if (b == props.getEnquiryByte()) {
             logger.debug("ENQ received outside frame");
+            if (wire) {
+                DimensionWireDebug.control("WIRE-IN ", b, "ENQ from analyzer"
+                        + (props.isAutoEnqAck() ? " - answering ACK (autoEnqAck)" : " - ignored"));
+            }
             if (props.isAutoEnqAck()) {
                 sendByte(props.getPositiveAckByte());
             }
         } else if (b == props.getPositiveAckByte() || b == props.getNegativeAckByte()) {
             logger.debug("Stray ACK/NAK consumed outside frame (instrument acknowledged our response)");
+            if (wire) {
+                DimensionWireDebug.control("WIRE-IN ", b,
+                        "analyzer acknowledged our frame");
+            }
         } else {
             logger.debug("Discarded stray byte outside frame: 0x" + Integer.toHexString(b));
+            if (wire) {
+                DimensionWireDebug.control("WIRE-IN ", b, "stray byte discarded");
+            }
         }
     }
 
@@ -312,9 +356,23 @@ public class DimensionStreamHandler extends StreamHandler {
                     // echo the scanned ID, not the stored one
                     order = echoSampleId(order, sampleId);
                 }
+                if (DimensionWireDebug.enabled(props)) {
+                    DimensionWireDebug.event("QUERY [I] sampleId='" + sampleId
+                            + "' -> registry "
+                            + (order != null
+                                ? "HIT (" + order.getTestCount() + " test(s))"
+                                : "MISS (no queued order for this barcode)")
+                            + (order != null && sampleId != null
+                                && !sampleId.equals(order.getSampleId())
+                                ? ", D echoes scanned ID" : ""));
+                }
             } else { // poll - Table 1-11: P | Instrument ID | First Poll | Request | #Carriers
                 String firstPoll = fields.length > 2 ? fields[2] : "";
                 String request   = fields.length > 3 ? fields[3] : "";
+                if (DimensionWireDebug.enabled(props)) {
+                    DimensionWireDebug.event("POLL [P] firstPoll='" + firstPoll + "' request='"
+                            + request + "'");
+                }
                 if ("0".equals(firstPoll) && "1".equals(request)) {
                     // DELETE downloads have priority: the manual allows deleting
                     // a request only BEFORE processing starts, so a pending
@@ -468,6 +526,13 @@ public class DimensionStreamHandler extends StreamHandler {
         return s == null ? "" : s;
     }
 
+    /** Re-attaches the frame-terminator byte for WIRE debug display (read() consumed it). */
+    private byte[] withEtx(byte[] raw) {
+        byte[] wire = Arrays.copyOf(raw, raw.length + 1);
+        wire[raw.length] = (byte) props.getEndOfFrameByte();
+        return wire;
+    }
+
     /** FS as a char constant for payload building. */
     private static final char FS_CH = 0x1C;
 
@@ -532,20 +597,41 @@ public class DimensionStreamHandler extends StreamHandler {
             // (data was normalized by normalizeBody: trailing FS present, so the
             // checksum covers it exactly like every PN D00396 example frame.)
 
-            outputStream.write(frame.toByteArray());
+            byte[] wireFrame = frame.toByteArray();
+            long sentAt = System.currentTimeMillis();
+            outputStream.write(wireFrame);
             outputStream.flush();
             logger.debug("Dimension frame sent (attempt " + attempt + "), waiting for ACK");
+            if (DimensionWireDebug.enabled(props)) {
+                DimensionWireDebug.out(wireFrame, "channel/registry frame to analyzer, type '"
+                        + (char) (data[0] & 0xFF) + "' (attempt " + attempt + ")");
+            }
 
             int response = readAckResponse(ackTimeout);
 
             if (response == props.getPositiveAckByte()) {
                 logger.debug("Dimension frame ACKed");
+                if (DimensionWireDebug.enabled(props)) {
+                    DimensionWireDebug.event("frame type '" + (char) (data[0] & 0xFF)
+                            + "' ACKed by analyzer in "
+                            + (System.currentTimeMillis() - sentAt) + " ms");
+                }
                 return;
             } else if (response == props.getNegativeAckByte()) {
                 logger.warn("Dimension frame NAKed, retransmitting (attempt " + attempt + ")");
+                if (DimensionWireDebug.enabled(props)) {
+                    DimensionWireDebug.event("frame type '" + (char) (data[0] & 0xFF)
+                            + "' NAKed by analyzer after "
+                            + (System.currentTimeMillis() - sentAt) + " ms - retransmitting ("
+                            + attempt + "/" + maxAttempts + ")");
+                }
             } else {
                 logger.warn("Dimension no ACK within " + ackTimeout
                         + " ms (contention) - stopping wait, NOT retransmitting");
+                if (DimensionWireDebug.enabled(props)) {
+                    DimensionWireDebug.event("no ACK within " + ackTimeout
+                            + " ms (line contention) - stopping wait, NOT retransmitting");
+                }
                 return;
             }
         }
@@ -608,6 +694,12 @@ public class DimensionStreamHandler extends StreamHandler {
     }
 
     private void sendByte(int b) throws IOException {
+        if (DimensionWireDebug.enabled(props)) {
+            DimensionWireDebug.control("WIRE-OUT", b,
+                (b == props.getPositiveAckByte() ? "ACK to analyzer"
+                : b == props.getNegativeAckByte() ? "NAK to analyzer (retransmit request)"
+                : "control byte"));
+        }
         outputStream.write(b);
         outputStream.flush();
     }
@@ -634,13 +726,23 @@ public class DimensionStreamHandler extends StreamHandler {
         // Send ONCE; retransmit only on an explicit NAK. On a plain timeout we
         // stop waiting instead of duplicating the frame - a duplicate could
         // race with the instrument's next transmission on the line.
-        outputStream.write(frame.toByteArray());
+        byte[] wireFrame = frame.toByteArray();
+        long sentAt = System.currentTimeMillis();
+        outputStream.write(wireFrame);
         outputStream.flush();
+        if (DimensionWireDebug.enabled(props)) {
+            DimensionWireDebug.out(wireFrame, "auto response to analyzer, type '"
+                    + (char) payloadBytes[0] + "'");
+        }
 
         int response = readAckResponse(ackTimeout);
         for (int attempt = 1; response == props.getNegativeAckByte() && attempt <= 2; attempt++) {
             logger.debug("Auto response frame NAKed, resending (attempt " + attempt + ")");
-            outputStream.write(frame.toByteArray());
+            if (DimensionWireDebug.enabled(props)) {
+                DimensionWireDebug.event("auto response type '" + (char) payloadBytes[0]
+                        + "' NAKed - resending (" + attempt + "/2)");
+            }
+            outputStream.write(wireFrame);
             outputStream.flush();
             response = readAckResponse(ackTimeout);
         }
@@ -648,6 +750,13 @@ public class DimensionStreamHandler extends StreamHandler {
         if (response != props.getPositiveAckByte()) {
             logger.debug("Instrument did not acknowledge the auto response frame (response="
                     + response + ") - continuing");
+            if (DimensionWireDebug.enabled(props)) {
+                DimensionWireDebug.event("auto response type '" + (char) payloadBytes[0]
+                        + "' NOT acknowledged within " + ackTimeout + " ms - continuing");
+            }
+        } else if (DimensionWireDebug.enabled(props)) {
+            DimensionWireDebug.event("auto response type '" + (char) payloadBytes[0]
+                    + "' ACKed by analyzer in " + (System.currentTimeMillis() - sentAt) + " ms");
         }
     }
 

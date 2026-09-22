@@ -26,10 +26,23 @@ import com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionTra
 /**
  * Modal settings dialog for the Siemens Dimension transmission mode.
  *
- * <p>Loads every field from the {@link DimensionTransmissionModeProperties}
- * reference passed to the constructor and writes the edited values back
- * into the SAME reference when OK is pressed, so Mirth's channel
- * serialization picks the changes up automatically.</p>
+ * <p>Follows Mirth Connect's own transmission-mode settings pattern
+ * ({@code TransmissionModeClientProvider} contract): the provider hands this
+ * dialog the SAME {@link DimensionTransmissionModeProperties} reference that
+ * Mirth holds inside its editable channel working-copy. The dialog loads
+ * every control from that reference on open and writes the edited values
+ * back into it when OK is pressed - so Mirth's channel serialization picks
+ * the changes up automatically when the user saves the channel.</p>
+ *
+ * <p><b>Every</b> property of {@code DimensionTransmissionModeProperties}
+ * has a control here (frame bytes, handshake, auto responses, order
+ * download, dispatch/mode) - nothing is UI-only, and no property is left
+ * without a form field.</p>
+ *
+ * <p><b>Commit discipline (Mirth-style, all-or-nothing):</b> Save validates
+ * and parses EVERY control into locals first; only if all values are valid
+ * are they committed to the properties object in one pass. An invalid value
+ * can never leave a half-written properties object behind.</p>
  */
 public class DimensionSettingsDialog extends JDialog {
 
@@ -57,10 +70,17 @@ public class DimensionSettingsDialog extends JDialog {
     private JCheckBox autoPollResponseCheck;
     private JCheckBox autoEnqAckCheck;
 
+    // --- dynamic order download (bidirectional) ---
+    private JCheckBox orderLookupCheck;
+    private JTextField orderQueueKeyField;
+
     // --- dispatch / mode ---
     private JCheckBox includeChecksumCheck;
     private JComboBox<String> outputFormatCombo;
     private JCheckBox serverModeCheck;
+
+    // --- diagnostics ---
+    private JCheckBox wireDebugCheck;
 
     public DimensionSettingsDialog(Frame owner, DimensionTransmissionModeProperties props) {
         super(owner, "Siemens Dimension Frame Settings", Dialog.ModalityType.APPLICATION_MODAL);
@@ -90,7 +110,11 @@ public class DimensionSettingsDialog extends JDialog {
         gbc.gridy++;
         content.add(buildAutoResponsePanel(), gbc);
         gbc.gridy++;
+        content.add(buildOrderDownloadPanel(), gbc);
+        gbc.gridy++;
         content.add(buildDispatchPanel(), gbc);
+        gbc.gridy++;
+        content.add(buildDebugPanel(), gbc);
         gbc.gridy++;
         content.add(buildButtonPanel(), gbc);
     }
@@ -134,6 +158,19 @@ public class DimensionSettingsDialog extends JDialog {
         return panel;
     }
 
+    private JPanel buildOrderDownloadPanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createTitledBorder("Order Download (Bidirectional)"));
+
+        orderLookupCheck = addBooleanRow(panel, 0, "Dynamic Order Lookup",
+                "Answer P/I frames with a Sample Request (D) built from the DimensionOrderRegistry "
+                + "(orders pushed via Reg.pushOrder / DB feeder). Turn off when the channel transformer "
+                + "builds protocol frames itself.");
+        orderQueueKeyField = addTextRow(panel, 1, "Order Queue Key",
+                "Registry queue key - pushing channels must push with the same key (empty = default)");
+        return panel;
+    }
+
     private JPanel buildDispatchPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createTitledBorder("Dispatch / Mode"));
@@ -161,6 +198,18 @@ public class DimensionSettingsDialog extends JDialog {
 
         serverModeCheck = addBooleanRow(panel, 2, "Server Mode",
                 "true = receiver (listener/source), false = sender");
+        return panel;
+    }
+
+    private JPanel buildDebugPanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setBorder(BorderFactory.createTitledBorder("Debug"));
+
+        wireDebugCheck = addBooleanRow(panel, 0, "Wire Debug (raw frames to log)",
+                "Log EVERY raw frame the analyzer sends/receives (hex + ASCII), every ACK/NAK/ENQ "
+                + "control byte, the internal raw-to-HL7 conversion pair and the registry decisions "
+                + "to the Mirth server log (logger 'dimension.wire', INFO level). "
+                + "Global override without redeploy: -Ddimension.wireDebug=true");
         return panel;
     }
 
@@ -273,44 +322,88 @@ public class DimensionSettingsDialog extends JDialog {
         autoPollResponseCheck.setSelected(props.isAutoPollResponse());
         autoEnqAckCheck.setSelected(props.isAutoEnqAck());
 
+        orderLookupCheck.setSelected(props.isOrderLookupEnabled());
+        orderQueueKeyField.setText(props.getOrderQueueKey());
+
         includeChecksumCheck.setSelected(props.isIncludeChecksumInPayload());
         outputFormatCombo.setSelectedItem(props.getMessageOutputFormat());
         serverModeCheck.setSelected(props.isServerMode());
+        wireDebugCheck.setSelected(props.isWireDebugEnabled());
     }
 
+    /**
+     * Mirth-style all-or-nothing commit: parse and validate EVERY control
+     * into locals first; only if all values are valid are they written to
+     * the properties object in one pass. A bad value anywhere leaves the
+     * properties object completely untouched.
+     */
     private boolean saveToProps() {
+        // --- pass 1: validate everything into locals ---------------------
+        int startOfFrame, endOfFrame, fieldSep, enquiry, ack, nak;
+        int checksumLen, maxRetrans, ackTimeout, frameTimeout;
+        String resultAccStatus, outputFormat, orderQueueKey;
         try {
-            props.setStartOfFrameByte(parseHex(startOfFrameField.getText(), DimensionConstants.STX));
-            props.setEndOfFrameByte(parseHex(endOfFrameField.getText(), DimensionConstants.ETX));
-            props.setFieldSeparatorByte(parseHex(fieldSeparatorField.getText(), DimensionConstants.FS));
-            props.setEnquiryByte(parseHex(enquiryField.getText(), DimensionConstants.ENQ));
+            startOfFrame = parseHex(startOfFrameField.getText(), DimensionConstants.STX);
+            endOfFrame   = parseHex(endOfFrameField.getText(), DimensionConstants.ETX);
+            fieldSep     = parseHex(fieldSeparatorField.getText(), DimensionConstants.FS);
+            enquiry      = parseHex(enquiryField.getText(), DimensionConstants.ENQ);
+            ack          = parseHex(ackField.getText(), DimensionConstants.ACK);
+            nak          = parseHex(nakField.getText(), DimensionConstants.NAK);
 
-            props.setUseChecksum(useChecksumCheck.isSelected());
-            props.setChecksumByteLength(parseInt(checksumLengthField.getText(), 2));
-            props.setPositiveAckByte(parseHex(ackField.getText(), DimensionConstants.ACK));
-            props.setNegativeAckByte(parseHex(nakField.getText(), DimensionConstants.NAK));
-            props.setMaxRetransmissions(parseInt(maxRetransField.getText(), DimensionConstants.DEFAULT_MAX_RETRANSMISSIONS));
-            props.setAckTimeoutMs(parseInt(ackTimeoutField.getText(), DimensionConstants.DEFAULT_ACK_TIMEOUT_MS));
-            props.setFrameTimeoutMs(parseInt(frameTimeoutField.getText(), DimensionConstants.DEFAULT_FRAME_TIMEOUT_MS));
+            checksumLen  = parseInt(checksumLengthField.getText(), 2);
+            maxRetrans   = parseInt(maxRetransField.getText(), DimensionConstants.DEFAULT_MAX_RETRANSMISSIONS);
+            ackTimeout   = parseInt(ackTimeoutField.getText(), DimensionConstants.DEFAULT_ACK_TIMEOUT_MS);
+            frameTimeout = parseInt(frameTimeoutField.getText(), DimensionConstants.DEFAULT_FRAME_TIMEOUT_MS);
 
-            props.setAutoResultAcceptance(autoResultAcceptanceCheck.isSelected());
-            props.setResultAcceptanceStatus(resultAcceptanceStatusField.getText().trim().isEmpty()
-                    ? "A" : resultAcceptanceStatusField.getText().trim().substring(0, 1).toUpperCase());
-            props.setAutoPollResponse(autoPollResponseCheck.isSelected());
-            props.setAutoEnqAck(autoEnqAckCheck.isSelected());
+            String ras = resultAcceptanceStatusField.getText().trim();
+            resultAccStatus = ras.isEmpty() ? "A" : ras.substring(0, 1).toUpperCase();
 
-            props.setIncludeChecksumInPayload(includeChecksumCheck.isSelected());
-            props.setMessageOutputFormat(outputFormatCombo.getSelectedItem() == null
+            outputFormat = outputFormatCombo.getSelectedItem() == null
                     ? com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format.RAW_FRAME
-                    : String.valueOf(outputFormatCombo.getSelectedItem()));
-            props.setServerMode(serverModeCheck.isSelected());
-            return true;
+                    : String.valueOf(outputFormatCombo.getSelectedItem());
+
+            String oqk = orderQueueKeyField.getText().trim();
+            orderQueueKey = oqk.isEmpty() ? "default" : oqk;
         } catch (Exception e) {
             JLabel message = new JLabel("Invalid value: " + e.getMessage());
             javax.swing.JOptionPane.showMessageDialog(this, message,
                     "Invalid Settings", javax.swing.JOptionPane.ERROR_MESSAGE);
             return false;
         }
+
+        // --- pass 2: commit to the Mirth-owned properties object ---------
+        props.setStartOfFrameByte(startOfFrame);
+        props.setEndOfFrameByte(endOfFrame);
+        props.setFieldSeparatorByte(fieldSep);
+        props.setEnquiryByte(enquiry);
+
+        props.setUseChecksum(useChecksumCheck.isSelected());
+        props.setChecksumByteLength(checksumLen);
+        props.setPositiveAckByte(ack);
+        props.setNegativeAckByte(nak);
+        props.setMaxRetransmissions(maxRetrans);
+        props.setAckTimeoutMs(ackTimeout);
+        props.setFrameTimeoutMs(frameTimeout);
+
+        props.setAutoResultAcceptance(autoResultAcceptanceCheck.isSelected());
+        props.setResultAcceptanceStatus(resultAccStatus);
+        props.setAutoPollResponse(autoPollResponseCheck.isSelected());
+        props.setAutoEnqAck(autoEnqAckCheck.isSelected());
+
+        props.setOrderLookupEnabled(orderLookupCheck.isSelected());
+        props.setOrderQueueKey(orderQueueKey);
+
+        props.setIncludeChecksumInPayload(includeChecksumCheck.isSelected());
+        props.setMessageOutputFormat(outputFormat);
+        props.setServerMode(serverModeCheck.isSelected());
+        props.setWireDebugEnabled(wireDebugCheck.isSelected());
+
+        // Keep Mirth's base FrameModeProperties frame-byte fields in sync
+        // so any Mirth-internal reader of startOfMessageBytes/endOfMessageBytes
+        // sees the same values as the Dimension-specific fields.
+        props.setStartOfMessageBytes(String.format("%02X", startOfFrame & 0xFF));
+        props.setEndOfMessageBytes(String.format("%02X", endOfFrame & 0xFF));
+        return true;
     }
 
     private static String hex(int b) {
