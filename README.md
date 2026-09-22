@@ -6,6 +6,28 @@ A Mirth Connect transmission-mode plugin that speaks the **native Siemens
 Dimension protocol** (Dimension EXL / RxL / Xpand Clinical Chemistry Systems),
 modeled after the `bitdreamit-astm-e1381-transmission` plugin architecture.
 
+> **NEW in v2.2.0 — the "ASTM pattern" (Message Output Format = HL7_V2):**
+> the plugin now converts EVERY incoming frame into a standard HL7 v2.x
+> message *before* dispatch, so the channel uses the normal HL7 V2.x data
+> type and the transformer reads `msg['OBX']['OBX.3']['OBX.3.1']` exactly
+> like an ASTM/HL7 channel — no more raw-frame parsing in JavaScript:
+>
+> | Frame | Mirth receives |
+> |---|---|
+> | R Result | `ORU^R01` — MSH + PID + OBR + one OBX per test |
+> | I Query (barcode) | `QRY^A19` — barcode in PID-3.1 / QRD-8 |
+> | C Calibration | `ORU^R01` — `OBR-4 = <test>^CALIBRATION` |
+> | M Request Acceptance | `ACK^D01` — `MSA\|AA` stored / `MSA\|AE\|reason` rejected |
+> | P Poll / N No Request | `ACK^P01` / `ACK^N01` control messages (filter) |
+>
+> Full documentation with live-data dialogues, the DB-query-for-barcode
+> flows and both ready-made channel XMLs:
+> **[FULL-BIDIRECTIONAL-DOCUMENTATION.md](FULL-BIDIRECTIONAL-DOCUMENTATION.md)**,
+> `tools/dimension_hl7_transformer.js`,
+> `tools/Dimention-HL7-Serial.xml`, `tools/Dimention-HL7-TCP.xml`.
+> The previous raw-frame behavior remains available (`RAW_FRAME`) and is
+> covered by regression tests.
+
 It appears in the **Transmission Mode** dropdown of:
 
 * the standard **TCP Listener / TCP Sender** connectors, and

@@ -228,6 +228,43 @@ public class DimensionFrameTest {
     }
 
     @Test
+    public void testPollDownloadDisabledByProperty() throws IOException {
+        // Send ID/Receive labs: -Ddimension.pollDownload=false must stop the
+        // Request=1 poll from taking orders (poll -> N, order kept), while
+        // the barcode query [I] still downloads (linked-to-scan delivery).
+        System.setProperty("dimension.pollDownload", "false");
+        try {
+            DimensionOrderRegistry.clear("t-nopd");
+            DimensionOrderRegistry.pushOrder(
+                    "t-nopd", "SENDID01", "TEST,PATIENT", "1", "0", "GLUC");
+
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            DimensionStreamHandler handler =
+                    newHandler(frame("P\u001CDIM\u001C0\u001C1\u001C0\u001C"), out, "t-nopd");
+            handler.read(); // Request=1 poll with the flag off -> N, order kept
+            assertEquals("poll must NOT consume the queue when disabled",
+                    1, DimensionOrderRegistry.queueSize("t-nopd"));
+            assertTrue("poll must get No Request",
+                    out.toString("US-ASCII").endsWith(frame("N\u001C")));
+
+            // the Send ID query still downloads (linked-to-scan delivery)
+            DimensionStreamHandler q =
+                    newHandler(frame("I\u001CSENDID01\u001C"), out, "t-nopd");
+            q.read();
+            assertTrue("query must still download with pollDownload off",
+                    out.toString("US-ASCII")
+                       .contains(frame("D\u001C0\u001C0\u001CA\u001CTEST,PATIENT"
+                               + "\u001CSENDID01\u001C1\u001C\u001C0\u001C1\u001C**"
+                               + "\u001C1\u001C1\u001CGLUC\u001C")));
+            assertEquals("query must consume the order",
+                    0, DimensionOrderRegistry.queueSize("t-nopd"));
+        } finally {
+            System.clearProperty("dimension.pollDownload");
+            DimensionOrderRegistry.clear("t-nopd");
+        }
+    }
+
+    @Test
     public void testOrderLookupDisabledFallsBackToNoRequest() throws IOException {
         DimensionOrderRegistry.clear("t-off");
         DimensionOrderRegistry.pushOrder("t-off", "043092011", "DOE,JOHN", "1", "0", "GLU");
@@ -338,6 +375,112 @@ public class DimensionFrameTest {
             if ("false".equals(old)) { System.clearProperty("dimension.demoOrders"); }
             else { System.setProperty("dimension.demoOrders", old); }
         }
+    }
+
+    // ==================================================================
+    // v2.1.0 - FULL option coverage: DELETE downloads + M acceptance
+    // bookkeeping (every PN D00396 computer-side option handled)
+    // ==================================================================
+
+    @Test
+    public void testDeleteDownloadOnPoll() throws IOException {
+        // PN D00396 Table 1-12: Transaction 'D' = delete an already-downloaded
+        // request. The delete must be a FULL request frame with D in the
+        // Transaction field, and it must NOT wait behind new adds (a request
+        // can only be deleted before processing starts).
+        DimensionOrderRegistry.clear("t-del");
+        DimensionOrderRegistry.pushOrder("t-del", "111111", "P,A", "1", "0", "GLU");
+        DimensionOrderRegistry.pushDelete("t-del", "012345", "Doe,John", "2", "0", "BUN,CREA");
+
+        String convPoll = frame("P\u001CDIM\u001C0\u001C1\u001C0\u001C");
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        DimensionStreamHandler handler = newHandler(convPoll + convPoll, out, "t-del");
+
+        // poll 1 -> the DELETE frame (priority over the pending add)
+        handler.read();
+        String w1 = out.toString("US-ASCII");
+        String delFrame = frame("D\u001C0\u001C0\u001CD\u001CDoe,John\u001C012345\u001C2\u001C\u001C0\u001C1\u001C**\u001C1\u001C2\u001CBUN\u001CCREA\u001C");
+        assertTrue("first conversational poll must send the DELETE frame",
+                w1.contains(delFrame));
+
+        // poll 2 -> the ADD still queued behind it
+        handler.read();
+        String w2 = out.toString("US-ASCII");
+        assertTrue("second poll must send the pending ADD",
+                w2.contains(frame("D\u001C0\u001C0\u001CA\u001CP,A\u001C111111\u001C1\u001C\u001C0\u001C1\u001C**\u001C1\u001C1\u001CGLU\u001C")));
+        assertNull(handler.read());
+    }
+
+    @Test
+    public void testDeleteNeedsOriginalTests() {
+        // The manual requires the FULL request for a delete - a delete push
+        // without tests is rejected like an add without tests.
+        DimensionOrderRegistry.clear("t-del2");
+        try {
+            DimensionOrderRegistry.pushDelete("t-del2", "012345", "", "1", "0", "");
+            throw new AssertionError("delete without tests must be rejected");
+        } catch (IllegalArgumentException expected) { /* ok */ }
+        DimensionOrderRegistry.pushDelete("t-del2", "012345", "", "1", "0", "GLU,CREA");
+        assertEquals(1, DimensionOrderRegistry.deleteQueueSize("t-del2"));
+        DimensionOrderRegistry.DimensionOrder d = DimensionOrderRegistry.takeNextDelete("t-del2");
+        assertEquals("012345", d.getSampleId());
+        assertEquals(0, DimensionOrderRegistry.deleteQueueSize("t-del2"));
+        DimensionOrderRegistry.clear("t-del2");
+    }
+
+    @Test
+    public void testDownloadBookkeepingAcceptAndReject() throws IOException {
+        // The handler marks every sent D frame in-flight; the transformer's
+        // M-A / M-R branches close the loop.
+        DimensionOrderRegistry.clear("t-book");
+        DimensionOrderRegistry.pushOrder("t-book", "043092011", "DOE,JOHN", "1", "0", "BUN,CREA");
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        DimensionStreamHandler handler =
+                newHandler(frame("I\u001C043092011\u001C"), out, "t-book");
+        handler.read(); // query answered with the D frame -> now in flight
+
+        DimensionOrderRegistry.InFlight f = DimensionOrderRegistry.getInFlight("t-book");
+        assertTrue("a download must be in flight after the D frame",
+                f != null && "043092011".equals(f.order.getSampleId()));
+        assertEquals("PENDING", f.status);
+
+        // M-R path: instrument refused (reason 5 = error in test request)
+        DimensionOrderRegistry.DimensionOrder rej =
+                DimensionOrderRegistry.rejectLastDownload("t-book", "5");
+        assertTrue("rejected order must be returned", rej != null
+                && "043092011".equals(rej.getSampleId()));
+        assertNull("in-flight cleared after rejection",
+                DimensionOrderRegistry.getInFlight("t-book"));
+        assertEquals(1, DimensionOrderRegistry.getRejected("t-book").size());
+        assertEquals("REJECTED", DimensionOrderRegistry.getRejected("t-book").get(0).status);
+        assertEquals("5", DimensionOrderRegistry.getRejected("t-book").get(0).rejectReason);
+
+        // M-A path: re-push a corrected order, download again, confirm
+        DimensionOrderRegistry.requeueOrder("t-book", rej);
+        DimensionStreamHandler handler2 =
+                newHandler(frame("I\u001C043092011\u001C"), out, "t-book");
+        handler2.read();
+        DimensionOrderRegistry.DimensionOrder ok =
+                DimensionOrderRegistry.confirmLastDownload("t-book");
+        assertTrue("confirmed order must be returned", ok != null
+                && "043092011".equals(ok.getSampleId()));
+        assertNull("in-flight cleared after acceptance",
+                DimensionOrderRegistry.getInFlight("t-book"));
+        DimensionOrderRegistry.clear("t-book");
+    }
+
+    @Test
+    public void testBookkeepingWithoutDownloadIsSafe() {
+        // M frames can also arrive for downloads that were never marked
+        // (e.g. after a Mirth restart) - the bookkeeping must never throw.
+        DimensionOrderRegistry.clear("t-safe");
+        assertNull(DimensionOrderRegistry.confirmLastDownload("t-safe"));
+        assertNull(DimensionOrderRegistry.rejectLastDownload("t-safe", "5"));
+        assertNull(DimensionOrderRegistry.getInFlight("t-safe"));
+        assertTrue(DimensionOrderRegistry.getRejected("t-safe").isEmpty());
+        assertNull(DimensionOrderRegistry.takeNextDelete("t-safe"));
+        DimensionOrderRegistry.clear("t-safe");
     }
 
     private static int countStx(String s) {

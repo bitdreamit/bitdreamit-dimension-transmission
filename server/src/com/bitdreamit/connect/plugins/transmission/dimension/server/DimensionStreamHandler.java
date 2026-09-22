@@ -288,7 +288,9 @@ public class DimensionStreamHandler extends StreamHandler {
      *       Field must match or the message will be rejected").</li>
      *   <li>Poll [P]: only a conversational poll (First Poll = 0 AND
      *       Request = 1, manual p.1-8) downloads; it pops the FIFO head.
-     *       Every other poll gets No Request (the documented default).</li>
+     *       Every other poll gets No Request (the documented default).
+     *       Disable with -Ddimension.pollDownload=false for pure Send
+     *       ID/Receive labs (see {@link #pollDownloadEnabled()}).</li>
      *   <li>No order -> No Request (N) when autoPollResponse is on.</li>
      * </ul>
      */
@@ -325,8 +327,14 @@ public class DimensionStreamHandler extends StreamHandler {
                         sendApplicationFrame(dPayload);
                         return;
                     }
-                    order = DimensionOrderRegistry.takeOrder(key);
-                    if (order != null) { sampleId = order.getSampleId(); }
+                    order = null;
+                    if (pollDownloadEnabled()) {
+                        order = DimensionOrderRegistry.takeOrder(key);
+                        if (order != null) { sampleId = order.getSampleId(); }
+                    } else {
+                        logger.debug("Poll order download disabled "
+                                + "(dimension.pollDownload=false) - No Request");
+                    }
                 }
             }
 
@@ -349,6 +357,29 @@ public class DimensionStreamHandler extends StreamHandler {
             logger.debug("No order for frame type '" + type + "' - auto No Request");
             sendApplicationFrame(DimensionConstants.NO_REQUEST_PAYLOAD);
         }
+    }
+
+    /**
+     * Poll-driven order download switch (manual Send/Receive mode).
+     *
+     * <p>Some labs run the pure Send ID/Receive workflow, where every order
+     * must be delivered as the DIRECT answer to a tray/barcode query [I] -
+     * the instrument links the downloaded order to the scanned tray position
+     * and only then starts the tube. An order delivered by a Request=1 poll
+     * is NOT linked to any tray position: the instrument lists it but never
+     * runs it, and the later scan of the same barcode gets No Request (the
+     * queue is already empty) - the classic "order in list, tube never runs"
+     * field report.</p>
+     *
+     * <p>Setting the JVM system property {@code -Ddimension.pollDownload=false}
+     * disables taking ADD orders from the queue on Request=1 polls (such
+     * polls then get No Request). Query [I] delivery and DELETE downloads
+     * are unaffected. Default: {@code true} (manual Send/Receive behavior,
+     * unchanged for existing installs).</p>
+     */
+    private static boolean pollDownloadEnabled() {
+        return Boolean.parseBoolean(
+                System.getProperty("dimension.pollDownload", "true").trim());
     }
 
     /**
