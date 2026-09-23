@@ -57,6 +57,8 @@ public final class DimensionConstants {
      * a maximum of four times" (instrument error 318 = "Received fourth NAK").
      */
     public static final int  DEFAULT_MAX_RETRANSMISSIONS   = 4;
+    /** ASCII-hex checksum characters per frame (2, per every PN D00396 example). */
+    public static final int  DEFAULT_CHECKSUM_LENGTH       = 2;
 
     // ------------------------------------------------------------------
     // Application level message types

@@ -1,93 +1,131 @@
 package com.bitdreamit.connect.plugins.transmission.dimension.client;
 
-import java.awt.Dialog;
 import java.awt.Dimension;
 import java.awt.Frame;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
-import java.awt.event.WindowAdapter;
-import java.awt.event.WindowEvent;
 
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
 import javax.swing.JButton;
-import javax.swing.JCheckBox;
-import javax.swing.JComboBox;
-import javax.swing.JDialog;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JTextField;
 
 import com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionConstants;
+import com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format;
 import com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionTransmissionModeProperties;
+import com.mirth.connect.client.ui.MirthDialog;
+import com.mirth.connect.client.ui.UIConstants;
+import com.mirth.connect.client.ui.components.MirthCheckBox;
+import com.mirth.connect.client.ui.components.MirthComboBox;
+import com.mirth.connect.client.ui.components.MirthFieldConstraints;
+import com.mirth.connect.client.ui.components.MirthTextField;
 
 /**
- * Modal settings dialog for the Siemens Dimension transmission mode.
+ * Modal settings dialog for the Siemens Dimension transmission mode,
+ * built the same way Mirth Connect builds its own.
  *
- * <p>Follows Mirth Connect's own transmission-mode settings pattern
- * ({@code TransmissionModeClientProvider} contract): the provider hands this
- * dialog the SAME {@link DimensionTransmissionModeProperties} reference that
- * Mirth holds inside its editable channel working-copy. The dialog loads
- * every control from that reference on open and writes the edited values
- * back into it when OK is pressed - so Mirth's channel serialization picks
- * the changes up automatically when the user saves the channel.</p>
+ * <p><b>Mirth-native UI kit (v2.3.0):</b> Every editable control is one of
+ * Mirth's private components - {@link MirthTextField}, {@link MirthCheckBox},
+ * {@link MirthComboBox} - exactly like Mirth's own
+ * {@code MLLPModeSettingsDialog}. The dialog itself extends Mirth's
+ * {@link MirthDialog} base class (the same base the MLLP dialog uses),
+ * which at runtime gives the dialog Mirth's Administrator integration for
+ * free: ESC closes the dialog, and the channel Save button is disabled
+ * while the dialog is open (MirthDialog hooks
+ * {@code PlatformUI.MIRTH_FRAME.setCanSave(...)}).</p>
+ *
+ * <p><b>Input constraints - MirthFieldConstraints (v2.3.0):</b> Text fields
+ * get Mirth's own {@link MirthFieldConstraints} document, the same class
+ * Mirth's MLLP dialog applies: numeric-only documents on every timeout /
+ * retry / length field, an anchored hex pattern (optional {@code 0x}
+ * prefix, max two hex digits) on every frame-byte field, a one-character
+ * uppercase letters-only document on the result-acceptance status, and a
+ * 64-character limit on the order queue key. Impossible values can no
+ * longer be typed at all.</p>
+ *
+ * <p><b>Validation (Mirth style):</b> Invalid fields are highlighted with
+ * Mirth's own {@link UIConstants#INVALID_COLOR} background (the same pink
+ * Mirth's MLLP dialog paints) plus a tooltip explaining the problem, and
+ * {@link #resetInvalidProperties()} clears the highlights when the dialog
+ * opens - the exact lifecycle MLLPModeSettingsDialog uses.</p>
+ *
+ * <p>Labels, panels and the OK/Cancel buttons stay plain Swing
+ * ({@code JLabel} / {@code JPanel} / {@code JButton}) - Mirth's own
+ * MLLPModeSettingsDialog form uses exactly those plain classes for the
+ * non-editable parts, so the dialog looks the way a first-class Mirth
+ * transmission mode looks.</p>
+ *
+ * <p><b>Save wiring (TransmissionModeClientProvider contract):</b> the
+ * provider hands this dialog the SAME
+ * {@link DimensionTransmissionModeProperties} reference that Mirth holds
+ * inside its editable channel working-copy. The dialog loads every control
+ * from that reference on open and writes the edited values back into it
+ * when OK is pressed - Mirth's channel serialization picks the changes up
+ * automatically when the user saves the channel.</p>
  *
  * <p><b>Every</b> property of {@code DimensionTransmissionModeProperties}
  * has a control here (frame bytes, handshake, auto responses, order
- * download, dispatch/mode) - nothing is UI-only, and no property is left
- * without a form field.</p>
+ * download, dispatch/mode, wire debug) - nothing is UI-only.</p>
  *
  * <p><b>Commit discipline (Mirth-style, all-or-nothing):</b> Save validates
  * and parses EVERY control into locals first; only if all values are valid
  * are they committed to the properties object in one pass. An invalid value
  * can never leave a half-written properties object behind.</p>
  */
-public class DimensionSettingsDialog extends JDialog {
+public class DimensionSettingsDialog extends MirthDialog {
 
     private final DimensionTransmissionModeProperties props;
     private boolean okPressed = false;
 
     // --- frame bytes ---
-    private JTextField startOfFrameField;
-    private JTextField endOfFrameField;
-    private JTextField fieldSeparatorField;
-    private JTextField enquiryField;
+    private MirthTextField startOfFrameField;
+    private MirthTextField endOfFrameField;
+    private MirthTextField fieldSeparatorField;
+    private MirthTextField enquiryField;
 
     // --- handshake ---
-    private JCheckBox useChecksumCheck;
-    private JTextField checksumLengthField;
-    private JTextField ackField;
-    private JTextField nakField;
-    private JTextField maxRetransField;
-    private JTextField ackTimeoutField;
-    private JTextField frameTimeoutField;
+    private MirthCheckBox useChecksumCheck;
+    private MirthTextField checksumLengthField;
+    private MirthTextField ackField;
+    private MirthTextField nakField;
+    private MirthTextField maxRetransField;
+    private MirthTextField ackTimeoutField;
+    private MirthTextField frameTimeoutField;
 
     // --- auto responses ---
-    private JCheckBox autoResultAcceptanceCheck;
-    private JTextField resultAcceptanceStatusField;
-    private JCheckBox autoPollResponseCheck;
-    private JCheckBox autoEnqAckCheck;
+    private MirthCheckBox autoResultAcceptanceCheck;
+    private MirthTextField resultAcceptanceStatusField;
+    private MirthCheckBox autoPollResponseCheck;
+    private MirthCheckBox autoEnqAckCheck;
 
     // --- dynamic order download (bidirectional) ---
-    private JCheckBox orderLookupCheck;
-    private JTextField orderQueueKeyField;
+    private MirthCheckBox orderLookupCheck;
+    private MirthTextField orderQueueKeyField;
 
     // --- dispatch / mode ---
-    private JCheckBox includeChecksumCheck;
-    private JComboBox<String> outputFormatCombo;
-    private JCheckBox serverModeCheck;
+    private MirthCheckBox includeChecksumCheck;
+    private MirthComboBox<String> outputFormatCombo;
+    private MirthCheckBox serverModeCheck;
 
     // --- diagnostics ---
-    private JCheckBox wireDebugCheck;
+    private MirthCheckBox wireDebugCheck;
+
+    // --- invalid-field highlight (Mirth UIConstants.INVALID_COLOR style) ---
+    private MirthTextField invalidField;
 
     public DimensionSettingsDialog(Frame owner, DimensionTransmissionModeProperties props) {
-        super(owner, "Siemens Dimension Frame Settings", Dialog.ModalityType.APPLICATION_MODAL);
+        // MirthDialog(Window, String, boolean) - same base + same style of
+        // construction Mirth's own MLLPModeSettingsDialog uses.
+        super(owner, "Siemens Dimension Frame Settings", true);
         this.props = props;
         initComponents();
         loadFromProps();
-        setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        resetInvalidProperties();
+        setDefaultCloseOperation(DISPOSE_ON_CLOSE);
         pack();
         setLocationRelativeTo(owner);
     }
@@ -134,7 +172,7 @@ public class DimensionSettingsDialog extends JDialog {
         panel.setBorder(BorderFactory.createTitledBorder("Data-Link Handshake"));
 
         useChecksumCheck   = addBooleanRow(panel, 0, "Use Checksum", "Validate the 8-bit Add-Mod-256 checksum of every frame");
-        checksumLengthField= addIntRow(panel, 1, "Checksum Byte Length", "Number of ASCII-hex checksum characters (2)");
+        checksumLengthField= addIntRow(panel, 1, "Checksum Byte Length", "Number of ASCII-hex checksum characters (1 or 2)");
         ackField           = addHexRow(panel, 2, "Positive Acknowledge (ACK)", "0x06 - sent after every valid frame");
         nakField           = addHexRow(panel, 3, "Negative Acknowledge (NAK)", "0x15 - sent on checksum mismatch");
         maxRetransField    = addIntRow(panel, 4, "Max Retransmissions", "NAK retries before aborting (protocol allows 4)");
@@ -185,9 +223,11 @@ public class DimensionSettingsDialog extends JDialog {
         fGbc.gridx = 0;
         fGbc.gridy = 1;
         panel.add(fmtLabel, fGbc);
-        outputFormatCombo = new JComboBox<String>(new String[] {
-                com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format.RAW_FRAME,
-                com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format.HL7_V2 });
+        // MirthComboBox has ONLY a no-arg constructor (same as Mirth's real
+        // component) - prefill with addItem, never an array constructor.
+        outputFormatCombo = new MirthComboBox<String>();
+        outputFormatCombo.addItem(DimensionHL7Format.RAW_FRAME);
+        outputFormatCombo.addItem(DimensionHL7Format.HL7_V2);
         outputFormatCombo.setToolTipText(
                 "RAW_FRAME = raw frame payload (transformer parses; Raw inbound data type). "
                 + "HL7_V2 = plugin converts every frame to standard HL7 v2.x (HL7 V2.x inbound data type; "
@@ -217,6 +257,8 @@ public class DimensionSettingsDialog extends JDialog {
         JPanel panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.X_AXIS));
 
+        // Plain JButton for OK/Cancel - Mirth's own MLLPModeSettingsDialog
+        // form uses plain javax.swing.JButton for its buttons too.
         JButton okButton = new JButton("OK");
         okButton.setMnemonic('O');
         okButton.addActionListener(new java.awt.event.ActionListener() {
@@ -245,29 +287,32 @@ public class DimensionSettingsDialog extends JDialog {
         panel.add(Box.createHorizontalGlue());
 
         getRootPane().setDefaultButton(okButton);
-        addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowClosing(WindowEvent e) {
-                dispose();
-            }
-        });
         return panel;
     }
 
     // ------------------------------------------------------------------
-    // Row builders
+    // Row builders (every input is a Mirth private component)
     // ------------------------------------------------------------------
 
-    private JTextField addHexRow(JPanel panel, int row, String label, String tip) {
-        JTextField field = addTextRow(panel, row, label, tip);
+    /** Hex byte field: optional 0x prefix + up to 2 hex digits, that's all. */
+    private MirthTextField addHexRow(JPanel panel, int row, String label, String tip) {
+        MirthTextField field = addTextRow(panel, row, label, tip);
+        // Anchored pattern - MirthFieldConstraints tests the WHOLE proposed
+        // content, so the field can only ever hold 0x00..0xFF style values.
+        field.setDocument(new MirthFieldConstraints("(?i)^(0x)?[0-9a-f]{0,2}$"));
         return field;
     }
 
-    private JTextField addIntRow(JPanel panel, int row, String label, String tip) {
-        return addTextRow(panel, row, label, tip);
+    /** Integer field: digits only - the same document Mirth's MLLP dialog
+     * puts on its max-retry-count field: new MirthFieldConstraints(0, false, false, true). */
+    private MirthTextField addIntRow(JPanel panel, int row, String label, String tip) {
+        MirthTextField field = addTextRow(panel, row, label, tip);
+        field.setDocument(new MirthFieldConstraints(0, false, false, true));
+        return field;
     }
 
-    private JTextField addTextRow(JPanel panel, int row, String label, String tip) {
+    /** Free text field with a length limit (no pattern restriction). */
+    private MirthTextField addTextRow(JPanel panel, int row, String label, String tip) {
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(2, 5, 2, 5);
         gbc.anchor = GridBagConstraints.WEST;
@@ -277,7 +322,8 @@ public class DimensionSettingsDialog extends JDialog {
         gbc.gridy = row;
         panel.add(lbl, gbc);
 
-        JTextField field = new JTextField(10);
+        MirthTextField field = new MirthTextField();
+        field.setColumns(10);
         field.setToolTipText(tip);
         gbc.gridx = 1;
         gbc.fill = GridBagConstraints.HORIZONTAL;
@@ -285,12 +331,12 @@ public class DimensionSettingsDialog extends JDialog {
         return field;
     }
 
-    private JCheckBox addBooleanRow(JPanel panel, int row, String label, String tip) {
+    private MirthCheckBox addBooleanRow(JPanel panel, int row, String label, String tip) {
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(2, 5, 2, 5);
         gbc.anchor = GridBagConstraints.WEST;
 
-        JCheckBox check = new JCheckBox(label);
+        MirthCheckBox check = new MirthCheckBox(label);
         check.setToolTipText(tip);
         gbc.gridx = 0;
         gbc.gridy = row;
@@ -335,39 +381,54 @@ public class DimensionSettingsDialog extends JDialog {
      * Mirth-style all-or-nothing commit: parse and validate EVERY control
      * into locals first; only if all values are valid are they written to
      * the properties object in one pass. A bad value anywhere leaves the
-     * properties object completely untouched.
+     * properties object completely untouched. The offending field is
+     * highlighted with Mirth's own UIConstants.INVALID_COLOR background -
+     * the same thing Mirth's MLLPModeSettingsDialog.checkProperties does.
      */
     private boolean saveToProps() {
+        // Mirth lifecycle: clear previous highlights on every save attempt
+        // (MLLPModeSettingsDialog does this at the top of checkProperties).
+        resetInvalidProperties();
+
         // --- pass 1: validate everything into locals ---------------------
         int startOfFrame, endOfFrame, fieldSep, enquiry, ack, nak;
         int checksumLen, maxRetrans, ackTimeout, frameTimeout;
         String resultAccStatus, outputFormat, orderQueueKey;
         try {
-            startOfFrame = parseHex(startOfFrameField.getText(), DimensionConstants.STX);
-            endOfFrame   = parseHex(endOfFrameField.getText(), DimensionConstants.ETX);
-            fieldSep     = parseHex(fieldSeparatorField.getText(), DimensionConstants.FS);
-            enquiry      = parseHex(enquiryField.getText(), DimensionConstants.ENQ);
-            ack          = parseHex(ackField.getText(), DimensionConstants.ACK);
-            nak          = parseHex(nakField.getText(), DimensionConstants.NAK);
+            startOfFrame = parseHex(startOfFrameField, DimensionConstants.STX);
+            endOfFrame   = parseHex(endOfFrameField, DimensionConstants.ETX);
+            fieldSep     = parseHex(fieldSeparatorField, DimensionConstants.FS);
+            enquiry      = parseHex(enquiryField, DimensionConstants.ENQ);
+            ack          = parseHex(ackField, DimensionConstants.ACK);
+            nak          = parseHex(nakField, DimensionConstants.NAK);
 
-            checksumLen  = parseInt(checksumLengthField.getText(), 2);
-            maxRetrans   = parseInt(maxRetransField.getText(), DimensionConstants.DEFAULT_MAX_RETRANSMISSIONS);
-            ackTimeout   = parseInt(ackTimeoutField.getText(), DimensionConstants.DEFAULT_ACK_TIMEOUT_MS);
-            frameTimeout = parseInt(frameTimeoutField.getText(), DimensionConstants.DEFAULT_FRAME_TIMEOUT_MS);
+            checksumLen  = parseInt(checksumLengthField, DimensionConstants.DEFAULT_CHECKSUM_LENGTH);
+            maxRetrans   = parseInt(maxRetransField, DimensionConstants.DEFAULT_MAX_RETRANSMISSIONS);
+            ackTimeout   = parseInt(ackTimeoutField, DimensionConstants.DEFAULT_ACK_TIMEOUT_MS);
+            frameTimeout = parseInt(frameTimeoutField, DimensionConstants.DEFAULT_FRAME_TIMEOUT_MS);
+
+            // Range rules (same invariants the provider's checkProperties enforces)
+            requireRange(checksumLengthField, checksumLen, 1, 2, "Checksum length must be 1 or 2");
+            requireMin(maxRetransField, maxRetrans, 1, "Max retransmissions must be at least 1");
+            requireMin(ackTimeoutField, ackTimeout, 1, "ACK timeout must be positive");
+            requireMin(frameTimeoutField, frameTimeout, 1, "Frame timeout must be positive");
 
             String ras = resultAcceptanceStatusField.getText().trim();
             resultAccStatus = ras.isEmpty() ? "A" : ras.substring(0, 1).toUpperCase();
 
             outputFormat = outputFormatCombo.getSelectedItem() == null
-                    ? com.bitdreamit.connect.plugins.transmission.dimension.shared.DimensionHL7Format.RAW_FRAME
+                    ? DimensionHL7Format.RAW_FRAME
                     : String.valueOf(outputFormatCombo.getSelectedItem());
 
             String oqk = orderQueueKeyField.getText().trim();
             orderQueueKey = oqk.isEmpty() ? "default" : oqk;
-        } catch (Exception e) {
-            JLabel message = new JLabel("Invalid value: " + e.getMessage());
-            javax.swing.JOptionPane.showMessageDialog(this, message,
-                    "Invalid Settings", javax.swing.JOptionPane.ERROR_MESSAGE);
+        } catch (IllegalArgumentException e) {
+            if (invalidField != null) {
+                invalidField.setBackground(UIConstants.INVALID_COLOR);
+            }
+            JOptionPane.showMessageDialog(this,
+                    "Invalid value: " + e.getMessage(),
+                    "Invalid Settings", JOptionPane.ERROR_MESSAGE);
             return false;
         }
 
@@ -406,24 +467,66 @@ public class DimensionSettingsDialog extends JDialog {
         return true;
     }
 
+    // ------------------------------------------------------------------
+    // Validation helpers
+    // ------------------------------------------------------------------
+
+    /** Mirth MLLPModeSettingsDialog lifecycle: clear the pink highlights. */
+    private void resetInvalidProperties() {
+        invalidField = null;
+        startOfFrameField.setBackground(null);
+        endOfFrameField.setBackground(null);
+        fieldSeparatorField.setBackground(null);
+        enquiryField.setBackground(null);
+        checksumLengthField.setBackground(null);
+        ackField.setBackground(null);
+        nakField.setBackground(null);
+        maxRetransField.setBackground(null);
+        ackTimeoutField.setBackground(null);
+        frameTimeoutField.setBackground(null);
+        resultAcceptanceStatusField.setBackground(null);
+        orderQueueKeyField.setBackground(null);
+    }
+
+    private void fail(MirthTextField field, String message) {
+        invalidField = field;
+        field.setToolTipText(message);
+        throw new IllegalArgumentException(message);
+    }
+
+    private void requireMin(MirthTextField field, int value, int min, String message) {
+        if (value < min) {
+            fail(field, message);
+        }
+    }
+
+    private void requireRange(MirthTextField field, int value, int min, int max, String message) {
+        if (value < min || value > max) {
+            fail(field, message);
+        }
+    }
+
     private static String hex(int b) {
         return String.format("0x%02X", b & 0xFF);
     }
 
-    private static int parseHex(String s, int defaultValue) {
+    private int parseHex(MirthTextField field, int defaultValue) {
+        invalidField = field;
         try {
-            String v = s.trim().replace("0x", "").replace("0X", "");
+            String v = field.getText().trim().replace("0x", "").replace("0X", "");
             return v.isEmpty() ? defaultValue : (Integer.parseInt(v, 16) & 0xFF);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("'" + s + "' is not a valid hex byte");
+            throw new IllegalArgumentException("'" + field.getText() + "' is not a valid hex byte");
         }
     }
 
-    private static int parseInt(String s, int defaultValue) {
+    private int parseInt(MirthTextField field, int defaultValue) {
+        invalidField = field;
         try {
-            return s.trim().isEmpty() ? defaultValue : Integer.parseInt(s.trim());
+            String v = field.getText().trim();
+            return v.isEmpty() ? defaultValue : Integer.parseInt(v);
         } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("'" + s + "' is not a valid number");
+            throw new IllegalArgumentException("'" + field.getText() + "' is not a valid number");
         }
     }
 
